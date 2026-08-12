@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPT 多模态教学知识库自动化构建系统 · 技术方案</title>
+<script>
+window.MathJax = { tex: { inlineMath: [['$','$'], ['\\(','\\)']], displayMath: [['$$','$$'], ['\\[','\\]']] } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
+<style>
+:root{
+  --navy:#1a3a5c; --navy2:#283650; --accent:#ed7d31; --accent2:#2b497f;
+  --grad-a:#1185fe; --grad-b:#a3c6fe; --bg:#eef3f9; --card:#fff;
+  --ink:#22303f; --muted:#5c6b82; --line:#d4deea; --mist:#f4f8ff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:"Noto Serif SC","Songti SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.85}
+/* 封面 */
+.cover{background:linear-gradient(135deg,#1a3a5c 0%,#0d2a4d 55%,#071d38 100%);color:#fff;padding:72px 30px 54px;text-align:center;border-bottom:5px solid var(--accent)}
+.cover .course{font-size:14px;letter-spacing:5px;opacity:.8}
+.cover h1{font-size:40px;margin:16px 0 10px;letter-spacing:2px}
+.cover .sub{font-size:17px;opacity:.9}
+.cover .meta{margin-top:22px;font-size:13px;opacity:.7}
+/* 布局 */
+.wrap{max-width:1000px;margin:0 auto;padding:10px 24px 80px}
+section{margin:40px 0}
+h2.sec{color:var(--navy);font-size:26px;border-left:6px solid var(--accent);padding-left:14px;margin-bottom:18px}
+h3{color:var(--navy2);font-size:19px;margin:22px 0 10px}
+h4{color:var(--accent2);font-size:16px;margin:16px 0 6px}
+p{margin:10px 0;text-align:justify}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:14px 0;box-shadow:0 3px 12px rgba(10,40,80,.06)}
+.card h4{margin-top:0}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:800px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.tag{display:inline-block;background:var(--mist);border:1px solid var(--line);color:var(--accent2);border-radius:6px;padding:1px 9px;font-size:12.5px;margin:0 4px 4px 0;font-family:Consolas,monospace}
+.tag.hot{background:#fdeee4;border-color:#f5c6a3;color:#c0500a}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+th{background:var(--navy);color:#fff;padding:8px 10px;text-align:left}
+td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fbfe}
+code{background:#eef3f9;padding:1px 6px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em;color:var(--accent2)}
+pre{background:#0f2440;color:#d6e4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.7;margin:12px 0}
+pre code{background:none;color:inherit}
+.fig{text-align:center;margin:20px 0}
+.fig svg{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:12px}
+.fig .cap{font-size:13px;color:var(--muted);margin-top:8px}
+ul,ol{margin:8px 0 8px 26px}
+li{margin:4px 0}
+.case{border-left:4px solid var(--accent);background:var(--mist);border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0}
+.case h4{color:var(--navy)}
+.step{display:flex;gap:12px;margin:10px 0}
+.step .no{flex:none;width:30px;height:30px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.kpi{display:inline-block;background:var(--accent);color:#fff;border-radius:8px;padding:2px 12px;font-size:13px;margin-right:8px}
+footer{text-align:center;color:var(--muted);font-size:12.5px;padding:26px 20px 46px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header class="cover">
+  <div class="course">Multimodal Knowledge Base · Engineering Solution</div>
+  <h1>PPT 多模态教学知识库自动化构建系统</h1>
+  <div class="sub">从一份课件 PPT 到「教材文案 + 公式 LaTeX + 图片理解 + 图文绑定」的完整技术方案</div>
+  <div class="meta">技术方案文档 · PPT-Paser 流水线 · 九大指令 · 应用场景与案例</div>
+</header>
+
+<div class="wrap">
+
+<!-- ================= 1 总览 ================= -->
+<section id="overview">
+  <h2 class="sec">一、系统总览</h2>
+  <p>本系统把一份教学 PPT 自动转化为<strong>可检索、可复用、可再加工</strong>的多模态教学知识库：文本、公式、图片及其语义理解被按页对齐，并由大模型进一步加工为教材文案，最终产出「图片集 + 图片理解 + 教材文案 + 图文绑定 JSON」四类资产，可一键导出为教材 HTML 或教学 Deck。</p>
+  <div class="fig">
+    <svg viewBox="0 0 960 430" xmlns="http://www.w3.org/2000/svg" font-family="Noto Sans SC,sans-serif">
+      <!-- 层1 输入 -->
+      <rect x="330" y="18" width="300" height="52" rx="10" fill="#1a3a5c"/>
+      <text x="480" y="42" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">输入：教学 PPT（.pptx）</text>
+      <text x="480" y="60" text-anchor="middle" fill="#a3c6fe" font-size="11">文本 / 公式 OLE / 图片 / 图表 / 版式</text>
+      <!-- 箭头 -->
+      <line x1="480" y1="70" x2="480" y2="94" stroke="#ed7d31" stroke-width="3"/>
+      <!-- 层2 提取 -->
+      <g>
+        <rect x="40" y="96" width="200" height="66" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="140" y="122" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">① 图片提取 cli_img</text>
+        <text x="140" y="142" text-anchor="middle" fill="#5c6b82" font-size="11">5类对象 · 三路过滤 · WMF识别</text>
+        <rect x="260" y="96" width="200" height="66" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="360" y="122" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">② 公式提取 cli_formula</text>
+        <text x="360" y="142" text-anchor="middle" fill="#5c6b82" font-size="11">OMML / EQ3 / OCR 三路径 → LaTeX</text>
+        <rect x="480" y="96" width="200" height="66" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="580" y="122" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">③ 文本提取 cli_text</text>
+        <text x="580" y="142" text-anchor="middle" fill="#5c6b82" font-size="11">逐页文本框/表格 · 排除页眉页脚</text>
+        <rect x="700" y="96" width="220" height="66" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="810" y="122" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">④ 图片AI解读 cli_caption</text>
+        <text x="810" y="142" text-anchor="middle" fill="#5c6b82" font-size="11">文档上下文模式 · 视觉大模型</text>
+      </g>
+      <line x1="480" y1="162" x2="480" y2="186" stroke="#ed7d31" stroke-width="3"/>
+      <!-- 层3 模型加工 -->
+      <g>
+        <rect x="140" y="188" width="680" height="70" rx="10" fill="#fdeee4" stroke="#f5c6a3"/>
+        <text x="480" y="214" text-anchor="middle" fill="#c0500a" font-size="14" font-weight="700">⑤ 教材文案生成 cli_author · DeepSeek 大模型</text>
+        <text x="480" y="236" text-anchor="middle" fill="#5c6b82" font-size="11.5">学科自动推断 → 三文档全文输入 → 自适应分批 → 教材口吻文案（≥300字/页）</text>
+      </g>
+      <line x1="480" y1="258" x2="480" y2="282" stroke="#ed7d31" stroke-width="3"/>
+      <!-- 层4 资产 -->
+      <g>
+        <rect x="40" y="284" width="205" height="84" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="142" y="308" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">images/ 图片集</text>
+        <text x="142" y="330" text-anchor="middle" fill="#5c6b82" font-size="11">PNG 教学图<br/>（曲线矢量已渲染）</text>
+        <rect x="260" y="284" width="205" height="84" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="362" y="308" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">&lt;名&gt;_captions.md</text>
+        <text x="362" y="330" text-anchor="middle" fill="#5c6b82" font-size="11">图片理解<br/>（教材角度解读）</text>
+        <rect x="480" y="284" width="205" height="84" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="582" y="308" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">&lt;名&gt;_textbook.md</text>
+        <text x="582" y="330" text-anchor="middle" fill="#5c6b82" font-size="11">教材文案<br/>（一页一节）</text>
+        <rect x="700" y="284" width="220" height="84" rx="10" fill="#fff" stroke="#d4deea"/>
+        <text x="810" y="308" text-anchor="middle" fill="#1a3a5c" font-size="13" font-weight="700">&lt;名&gt;_binding.json</text>
+        <text x="810" y="330" text-anchor="middle" fill="#5c6b82" font-size="11">图文绑定<br/>（每页文案 ↔ 该页图片）</text>
+      </g>
+      <line x1="480" y1="368" x2="480" y2="392" stroke="#ed7d31" stroke-width="3"/>
+      <!-- 层5 应用 -->
+      <g>
+        <rect x="60" y="394" width="270" height="34" rx="17" fill="#1185fe"/>
+        <text x="195" y="416" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">⑥ 一键成书 gen_html / build_deck</text>
+        <rect x="350" y="394" width="260" height="34" rx="17" fill="#1185fe"/>
+        <text x="480" y="416" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">⑦ 编排执行 PPT-Paser</text>
+        <rect x="630" y="394" width="270" height="34" rx="17" fill="#1185fe"/>
+        <text x="765" y="416" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">⑧ 知识库应用（RAG / 个性化 / 出题）</text>
+      </g>
+    </svg>
+    <div class="cap">图 1 · 系统总体架构：提取层 → 模型加工层 → 资产层 → 应用层</div>
+  </div>
+  <div class="grid g4">
+    <div class="card"><h4>提取层</h4><p>本地解析 PPT 包内 XML/OLE/媒体，不依赖网络，产出结构化中间文件（过程文件/）。</p></div>
+    <div class="card"><h4>模型层</h4><p>视觉模型理解图片、文本模型撰写教材文案，全部带<strong>页码对齐</strong>上下文。</p></div>
+    <div class="card"><h4>资产层</h4><p>四类有效结果（图片/图片理解/教材文案/图文绑定）进入结果目录，供下游任意消费。</p></div>
+    <div class="card"><h4>应用层</h4><p>教材 HTML/教学 Deck/知识问答/个性化学习/试题生成，见第五节案例。</p></div>
+  </div>
+</section>
+
+<!-- ================= 2 流水线 ================= -->
+<section id="pipeline">
+  <h2 class="sec">二、自动化流水线（PPT-Paser 整体编排）</h2>
+  <p>一条命令 <code>PPT-Paser 课件.pptx -o 结果目录</code> 完成全部六步，并在执行前做环境自检与交互确认。</p>
+  <div class="fig">
+    <svg viewBox="0 0 960 180" xmlns="http://www.w3.org/2000/svg" font-family="Noto Sans SC,sans-serif">
+      <!-- 步骤条 -->
+      <g font-size="12.5" text-anchor="middle">
+        <g><rect x="18" y="40" width="132" height="74" rx="10" fill="#1a3a5c"/><text x="84" y="66" fill="#fff" font-weight="700">1 图片提取+过滤</text><text x="84" y="84" fill="#a3c6fe" font-size="10.5">含 WMF 识别/渲染</text><text x="84" y="100" fill="#a3c6fe" font-size="10.5">本地 · 0 Token</text></g>
+        <g><rect x="170" y="40" width="132" height="74" rx="10" fill="#2b497f"/><text x="236" y="66" fill="#fff" font-weight="700">2 公式提取</text><text x="236" y="84" fill="#a3c6fe" font-size="10.5">OMML/EQ3/OCR</text><text x="236" y="100" fill="#a3c6fe" font-size="10.5">本地 · 0 Token</text></g>
+        <g><rect x="322" y="40" width="132" height="74" rx="10" fill="#2b497f"/><text x="388" y="66" fill="#fff" font-weight="700">3 文本提取</text><text x="388" y="84" fill="#a3c6fe" font-size="10.5">文本框/表格</text><text x="388" y="100" fill="#a3c6fe" font-size="10.5">本地 · 0 Token</text></g>
+        <g><rect x="474" y="40" width="132" height="74" rx="10" fill="#ed7d31"/><text x="540" y="66" fill="#fff" font-weight="700">4 图片AI解读</text><text x="540" y="84" fill="#fff" font-size="10.5">视觉大模型</text><text x="540" y="100" fill="#fff" font-size="10.5">消耗 Token</text></g>
+        <g><rect x="626" y="40" width="132" height="74" rx="10" fill="#ed7d31"/><text x="692" y="66" fill="#fff" font-weight="700">5 教材文案</text><text x="692" y="84" fill="#fff" font-size="10.5">DeepSeek</text><text x="692" y="100" fill="#fff" font-size="10.5">消耗 Token</text></g>
+        <g><rect x="778" y="40" width="132" height="74" rx="10" fill="#1a3a5c"/><text x="844" y="66" fill="#fff" font-weight="700">6 图文绑定</text><text x="844" y="84" fill="#a3c6fe" font-size="10.5">JSON 关系</text><text x="844" y="100" fill="#a3c6fe" font-size="10.5">本地 · 0 Token</text></g>
+        <!-- 箭头 -->
+        <g stroke="#ed7d31" stroke-width="2.5" fill="none">
+          <line x1="150" y1="77" x2="168" y2="77"/><polygon points="168,72 180,77 168,82" fill="#ed7d31"/>
+          <line x1="302" y1="77" x2="320" y2="77"/><polygon points="320,72 332,77 320,82" fill="#ed7d31"/>
+          <line x1="454" y1="77" x2="472" y2="77"/><polygon points="472,72 484,77 472,82" fill="#ed7d31"/>
+          <line x1="606" y1="77" x2="624" y2="77"/><polygon points="624,72 636,77 624,82" fill="#ed7d31"/>
+          <line x1="758" y1="77" x2="776" y2="77"/><polygon points="776,72 788,77 776,82" fill="#ed7d31"/>
+        </g>
+      </g>
+      <!-- 前检 -->
+      <rect x="18" y="132" width="892" height="34" rx="8" fill="#f4f8ff" stroke="#a3c6fe"/>
+      <text x="30" y="154" fill="#2b497f" font-size="12">前置：环境自动检查（7 项组件缺失自动 pip 安装）→ API Key 检查（缺失引导注册）→ 执行计划 + Token 估算 → 用户确认（y 继续）</text>
+    </svg>
+    <div class="cap">图 2 · 六步流水线与前置交互（步骤 4、5 消耗 API Token，执行前预估并确认）</div>
+  </div>
+  <div class="card">
+    <h4>产物组织</h4>
+<pre>结果目录/
+├─ images/              ← 教学图片集（PNG，曲线矢量图已由 PowerPoint 渲染）
+├─ &lt;名&gt;_captions.md   ← 图片理解文档（教材角度：图片类型/内容理解/教学用途）
+├─ &lt;名&gt;_textbook.md   ← 教材文案（每页一节，≥300 字教材口吻）
+├─ &lt;名&gt;_binding.json  ← 图文绑定（每页文案 ↔ 该页图片与解读）
+└─ 过程文件/             ← 中间产物（by_page/manifest/texts/formulas/… 可溯源）</pre>
+  </div>
+</section>
+
+<!-- ================= 3 指令技术方案 ================= -->
+<section id="commands">
+  <h2 class="sec">三、各指令技术方案</h2>
+
+  <div class="card">
+    <h4>① 图片提取与过滤 cli_img <span class="tag">Pillow</span><span class="tag">ultralytics/YOLO</span><span class="tag">pywin32</span><span class="tag">PowerPoint COM</span></h4>
+    <ul>
+      <li><strong>对象识别</strong>：解析 slide XML，按 <code>&lt;p:pic&gt;</code>、形状填充、背景链（页→版式→母版）、OLE 公式、图表五类对象提取媒体，裁剪 <code>srcRect</code> 并按形状位置标注坐标（xfrm off → px）。</li>
+      <li><strong>三路过滤</strong>：规则层（尺寸过小 / 宽高比过限 / 纯色 / 孤立字符）→ <strong>位图封装 WMF 判据</strong>（解析 WMF 记录流：内嵌位图且无曲线记录 = 公式矢量版，直接滤除）→ YOLO 教学判据（本地权重，未检出的教学图强保留）。</li>
+      <li><strong>方案 B 矢量处理</strong>：位图封装 WMF（公式版）由 <strong>PowerPoint COM 渲染</strong>为高清 PNG → 视觉模型识别为 LaTeX 追加进 formulas.md；曲线型 WMF（真电路图/波形图）渲染为 PNG 收录进 images/。</li>
+      <li><strong>运行明细</strong>：逐页打印每张图的文件名 / 类型 / 尺寸 / 位置 / 形状。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>② 公式提取 cli_formula <span class="tag">omml2latex</span><span class="tag">olefile</span><span class="tag">pix2tex</span><span class="tag">LibreOffice</span></h4>
+    <p><strong>三路径级联</strong>，全部转为 LaTeX：</p>
+    <table>
+      <tr><th>路径</th><th>来源</th><th>实现</th><th>覆盖场景</th></tr>
+      <tr><td>路径 1</td><td>原生 OMML（&lt;m:oMath&gt;）</td><td>omml2latex 库转换</td><td>PowerPoint 2013+ 原生公式</td></tr>
+      <tr><td>路径 2</td><td>Equation.3 OLE</td><td>olefile 解包 + 内置 MTEF 解码器</td><td>公式编辑器（MathType）对象</td></tr>
+      <tr><td>路径 3</td><td>其余公式</td><td>LibreOffice 渲染 + xfrm 裁剪 + 数学 OCR</td><td>图片/特殊封装公式</td></tr>
+    </table>
+    <p>符号判据过滤误识别碎片；运行中逐条打印来源与 LaTeX 片段。</p>
+  </div>
+
+  <div class="card">
+    <h4>③ 文本提取 cli_text <span class="tag">ElementTree</span></h4>
+    <p>逐页遍历文本框 / 表格 / 标题占位符，排除页眉、页脚、页码与母版固定文本；输出 <code>ID | 类型 | 文本</code> 清单，<strong>标题条目被后续用于 HTML 章节命名</strong>。</p>
+  </div>
+
+  <div class="card">
+    <h4>④ 图片 AI 解读 cli_caption <span class="tag">qwen3.7-plus</span><span class="tag">DASHSCOPE</span></h4>
+    <ul>
+      <li><strong>文档上下文模式</strong>：先从文本前 3~5 页让模型判断课程/专业名（填入提示词括号），每张图附带<b>该页文本+公式</b>上下文再喂入视觉模型，从教材角度输出 100~200 字理解（图片类型 / 内容理解 / 教学用途）。</li>
+      <li><strong>工程保障</strong>：损坏图预检跳过（不浪费 Token）、失败自动重试、增量落盘（中断不丢已解读结果）。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>⑤ 教材文案生成 cli_author <span class="tag">deepseek-v4-flash</span><span class="tag">DEEPSEEK_API_KEY</span></h4>
+    <ul>
+      <li><strong>学科推断</strong>：texts 前 3~5 页交模型判断，填入「教材建设专家 + 多模态知识库工程师 + {学科}专业资深教师」提示词。</li>
+      <li><strong>整文一次生成</strong>：文本/公式/图片理解三份文档<b>全文输入</b>，系统提示词约束「不遗漏任何一页、任何公式」→ 系统性优于逐页调用。</li>
+      <li><strong>自适应分批</strong>：单批受三重约束（输入字符 / 页数 / 估算输出），超限自动拆批并合并到同一 md，防截断并告警。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4>⑥ 图文绑定 cli_bind</h4>
+    <p>把每页文案与<b>该页图片及解读</b>绑定为 JSON（按页组织 <code>{page, text, images[{file, caption}], has_image}</code>），作为检索与知识图谱的基石。</p>
+  </div>
+
+  <div class="card">
+    <h4>⑦ 整体编排 PPT-Paser <span class="tag">环境自愈</span><span class="tag">Key 引导</span><span class="tag">Token 预估</span><span class="tag">执行汇报</span></h4>
+    <table>
+      <tr><th>环节</th><th>能力</th></tr>
+      <tr><td>组件自检</td><td>7 项 pip 依赖缺失<b>自动安装</b>；YOLO 权重缺失自动下载提示；LibreOffice 可选探测</td></tr>
+      <tr><td>Key 引导</td><td>两个 Key（DeepSeek / 百炼）缺失时打印注册网页、用途、资费，交互输入并 setx 写入，提示重启后重跑</td></tr>
+      <tr><td>计划确认</td><td>分步说明每步干什么；图片解读/教材文案给出 Token 量级与耗时估算；输入 y 才执行（接受费用）</td></tr>
+      <tr><td>执行汇报</td><td>完成后输出每步工作量统计 + 结果文档使用说明</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h4>⑧ 成果导出 gen_html / build_deck</h4>
+    <p><code>gen_html.py</code>：binding.json + images → 单文件教材 HTML（MathJax 公式渲染、图注、目录、PPT 原生标题）；<code>build_deck.py</code>：基于 Lieflat edu-blueprint 风格生成 14 张横版教学 Deck（左脊导航 + 顶部选项卡 + 图卡 + 完整正文）。</p>
+  </div>
+</section>
+
+<!-- ================= 4 技术要点 ================= -->
+<section id="tech">
+  <h2 class="sec">四、关键技术要点</h2>
+  <div class="grid g3">
+    <div class="card"><h4>页码对齐</h4><p>文本/公式按 <code>## 第 N 页</code> 分块，图片从文件名 <code>slide_NN</code> 提取页码，三源在<b>页面级</b>天然对齐。</p></div>
+    <div class="card"><h4>无信息损失</h4><p>公式图片（WMF 位图封装）经 PowerPoint 渲染 + 视觉识别补回 LaTeX，避免过滤丢内容。</p></div>
+    <div class="card"><h4>零回归设计</h4><p>各指令协议稳定、薄壳式架构；渲染/识别等增强为后置钩子，失败自动降级。</p></div>
+    <div class="card"><h4>增量与断点</h4><p>解读增量落盘、编排 --skip 断点续跑、批次合并防截断。</p></div>
+    <div class="card"><h4>成本透明</h4><p>执行前 Token 估算与确认；公式识别可切本地 pix2tex（零费用）。</p></div>
+    <div class="card"><h4>可溯源</h4><p>过程文件全保留（by_page / manifest / 过滤报告 / 提取文档），可审计可复跑。</p></div>
+  </div>
+</section>
+
+<!-- ================= 5 应用场景 ================= -->
+<section id="apps">
+  <h2 class="sec">五、多模态知识库怎么用：应用场景与案例</h2>
+
+  <div class="case">
+    <h4>案例 1 · 自动构建「课程知识内容体系」</h4>
+    <p><strong>需求</strong>：项目/新课建设时，需要把散落课件整理为规范的知识体系（章→节→知识点→配图→公式）。</p>
+    <p><strong>做法</strong>：对全部章节课件跑 PPT-Paser → 得到按页组织的教材文案与图文绑定 → 以 <code>binding.json</code> 为骨架，按章节聚合生成知识树：每节 = 教材文案，每个知识点 = 对应公式（LaTeX）+ 配图（PNG）+ 图片解读。</p>
+    <p><strong>产出</strong>：可直接用于课程大纲、教学资源包、知识图谱的种子数据。教材 HTML 即知识体系的「人读版」。</p>
+  </div>
+
+  <div class="case">
+    <h4>案例 2 · 基于学情测验的「个性化学习内容生成」</h4>
+    <p><strong>需求</strong>：学生测验答题后，系统按错题知识点推送针对性讲解。</p>
+    <p><strong>做法</strong>：测验题目标注知识点标签 → 标签在 binding.json / textbook.md 中检索对应章节文案、公式与图片 → 大模型把「标准教材文案 + 学生错题 + 学情画像」融合，生成<b>个性化讲解</b>（含配图、公式、难度调整的例题与变式练习）。</p>
+    <p><strong>效果</strong>：同样的知识库，千人千面——基础薄弱者得到概念重构版，进阶者得到工程扩展版。</p>
+  </div>
+
+  <div class="case">
+    <h4>案例 3 · 教材二次开发与多形态出版</h4>
+    <p>以 textbook.md 为内容源，可按新大纲<b>重新组织章节</b>（增删、并页、重排序）；可一键导出教材 HTML（网页阅读/打印）、教学 Deck（课堂讲授）、可继续转 Word/PDF。图片与公式均为独立资产，支持双语、无障碍（图注可读）等再加工。</p>
+  </div>
+
+  <div class="case">
+    <h4>案例 4 · 智能问答与 RAG 检索</h4>
+    <p>binding.json 天然是结构化检索索引：问题 → 检索相关页文案 → 命中页的图片、公式、解读一并返回，构成<b>图文并茂的答案</b>（而非纯文本）。可接入向量库做语义检索，也可用关键词 + 页码做轻量检索，答案自动附「该知识点在第 X 页、见下图」。</p>
+  </div>
+
+  <div class="case">
+    <h4>案例 5 · 试题与测验生成</h4>
+    <p>基于每页文案与公式，按 Bloom 认知层次（识记/理解/应用/分析）自动生成：概念选择题（选项干扰项来自同节近似概念）、计算题（由公式 LaTeX 生成参数变体）、电路分析题（以真实配图为题干）。</p>
+  </div>
+
+  <div class="case">
+    <h4>案例 6 · 教师备课与教学竞赛</h4>
+    <p>教师输入新课件 → 几分钟拿到：教材文案（备课讲义）、图片理解（配图说明）、教育蓝图风 Deck（课堂演示 / 教学竞赛申报），从「找图、写稿、排版」中解放出来，聚焦教学设计本身。</p>
+  </div>
+</section>
+
+<!-- ================= 6 使用 ================= -->
+<section id="usage">
+  <h2 class="sec">六、快速上手</h2>
+  <div class="card">
+<pre># 1. 一条命令跑完整流水线（自动装依赖 / 引导 Key / 预估 Token / 确认执行）
+python cli_paser.py 第九章功率放大电路.pptx -o output
+
+# 2. 结果目录内：
+#    images/ + &lt;名&gt;_captions.md + &lt;名&gt;_textbook.md + &lt;名&gt;_binding.json
+
+# 3. 导出教材 HTML（MathJax 公式渲染，PPT 原生标题章节）
+python gen_html.py output -o output/第九章.html
+
+# 4. 导出教学 Deck（edu-blueprint 风格，14 张横版滑片）
+python build_deck.py   # 生成 9-功率放大电路_deck_full.html
+
+# 5. 单步执行与断点续跑
+python cli_img.py 课件.pptx -o out          # 只看图片
+python cli_caption.py out/images -o cap.md  # 只做图片解读
+python cli_paser.py 课件.pptx -o out --skip img,formula,text   # 从解读开始续跑</pre>
+  </div>
+</section>
+
+</div>
+
+<footer>PPT 多模态教学知识库自动化构建系统 · 技术方案 · 由 PPT-Paser 流水线与九大指令支撑<br>
+文本提取 → 公式 LaTeX → 图片理解 → 教材文案 → 图文绑定 → 一键成书/成 Deck · 应用：知识体系 / 个性化学习 / 智能问答 / 出题</footer>
+</body>
+</html>

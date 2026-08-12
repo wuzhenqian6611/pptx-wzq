@@ -33,7 +33,7 @@
 
 退出码：0 成功 / 1 处理异常 / 2 参数或环境错误。
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +44,7 @@ import sys
 import time
 from pathlib import Path
 
-from pptx_kb.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
+from pptx_wzq.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
                         make_progress, print_json, quiet_stdout,
                         banner, banner_end)
 

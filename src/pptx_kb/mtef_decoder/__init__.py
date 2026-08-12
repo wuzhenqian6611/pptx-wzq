@@ -1,1 +1,0 @@
-from pptx_kb.mtef_decoder.mtef import eq3_ole_bytes_to_latex

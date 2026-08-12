@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>pptx-kb 使用手册 · PPT 多模态教学知识库自动化构建</title>
+<title>pptx-wzq 使用手册 · PPT 多模态教学知识库自动化构建</title>
 <style>
 :root{--navy:#1a3a5c;--accent:#ed7d31;--bg:#eef3f9;--card:#fff;--ink:#22303f;--muted:#5c6b82;--line:#d4deea;--mist:#f4f8ff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -36,16 +36,16 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:26px 20px 4
 </head>
 <body>
 <header class="cover">
-  <h1>pptx-kb 使用手册</h1>
+  <h1>pptx-wzq 使用手册</h1>
   <div class="sub">PPT 多模态教学知识库自动化构建 · 从下载安装到进阶应用</div>
-  <div class="author">作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）</div>
+  <div class="author">作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</div>
 </header>
 <div class="wrap">
 
 <section>
 <h2 class="sec">零、关于本工具与作者</h2>
 <div class="card">
-<p><strong>作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）</strong></p>
+<p><strong>作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</strong></p>
 <p><strong>开发原因</strong>：高校教师在课程建设与教材建设中，长期面临「课件里的大量图片、公式、文本散落各处，难以整理为规范、可复用、图文并茂的教学资源」的痛点——手工整理一份课程的图文知识库往往要耗费数周。作者开发本工具，目的就是<strong>把 PPT 自动转化为图文并茂的多模态教学知识库</strong>，让教师从机械的整理工作中解放出来，把精力聚焦到教学设计本身。</p>
 <p><strong>开发时间与周期</strong>：本项目历经需求分析、核心提取引擎开发、AI 加工链路（图片理解/教材文案）、整体编排与打包发布等阶段，从初版原型到 v1.0.0 可安装发行版，累计开发周期约 1 个月（持续迭代中）。</p>
 <p><strong>后续开发计划</strong>：① 在现有 PPT 知识库基础上，新增<strong>微课视频分析能力</strong>——自动提取视频中的讲解音频（语音转写）、画面关键帧与字幕时间轴，与 PPT 页面/知识点对齐，形成「音视频 + 图文」融合的多模态知识库构建工具；② 支持更多输入格式（PDF/Word 讲义）；③ 提供图形界面与 Web 服务化部署。</p>
@@ -76,8 +76,8 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:26px 20px 4
 </ul>
 <h4>下载方式</h4>
 <ol>
-<li><strong>GitHub 下载源码</strong>：访问 <code>https://github.com/&lt;你的用户名&gt;/pptx-kb</code> → Code → Download ZIP，解压到本地；</li>
-<li><strong>或 pip 安装发行版</strong>（发布到 PyPI 后）：<code>pip install pptx-kb</code></li>
+<li><strong>GitHub 下载源码</strong>：访问 <code>https://github.com/&lt;你的用户名&gt;/pptx-wzq</code> → Code → Download ZIP，解压到本地；</li>
+<li><strong>或 pip 安装发行版</strong>（发布到 PyPI 后）：<code>pip install pptx-wzq</code></li>
 </ol>
 </div>
 </section>
@@ -86,7 +86,7 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:26px 20px 4
 <h2 class="sec">三、安装</h2>
 <div class="card">
 <pre># 方式 A：从源码安装（推荐开发者）
-cd pptx-kb
+cd pptx-wzq
 pip install -e .
 
 # 方式 B：附带本地公式 OCR 组件（可选，零费用识别）
@@ -176,6 +176,6 @@ pptx-paser 课件.pptx -o out --skip img,formula,text   # 跳过已完成步骤�
 </section>
 
 </div>
-<footer>pptx-kb 使用手册 · 作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）<br>本手册与工具一同开源，供高校教师与教育技术工作者使用</footer>
+<footer>pptx-wzq 使用手册 · 作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063<br>本手册与工具一同开源，供高校教师与教育技术工作者使用</footer>
 </body>
 </html>

@@ -4,7 +4,7 @@ PowerPoint 原生支持 WMF/EMF 的插入与渲染（比 LibreOffice 直接转�
 LibreOffice 单文件转换 WMF 会输出整页空白）。
 
 用法（内部模块，供 cli_img 调用）：
-    from pptx_kb import pptrender
+    from pptx_wzq import pptrender
     ok = pptrender.check_available()
     n_ok = pptrender.render_wmfs([(wmf_path, png_path, scale), ...])
 
@@ -13,7 +13,7 @@ LibreOffice 单文件转换 WMF 会输出整页空白）。
     - scale 为放大倍数（WMF 逻辑尺寸 × scale 像素导出，公式/线条清晰）；
     - 全部渲染结束后关闭演示文稿并退出 PowerPoint。
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"""
 from __future__ import annotations
 
 import sys

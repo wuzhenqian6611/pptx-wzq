@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pptx-kb"
+name = "pptx-wzq"
 version = "1.0.0"
 description = "PPT 多模态教学知识库自动化构建：图片/公式/文本提取 → 图片AI解读 → 教材文案 → 图文绑定 → 教材HTML/Deck"
 readme = "README.md"
@@ -33,19 +33,19 @@ ocr = ["pix2tex[latex]>=0.1.2"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-pptx-img = "pptx_kb.cli_img:main"
-pptx-formula = "pptx_kb.cli_formula:main"
-pptx-text = "pptx_kb.cli_text:main"
-pptx-caption = "pptx_kb.cli_caption:main"
-pptx-author = "pptx_kb.cli_author:main"
-pptx-bind = "pptx_kb.cli_bind:main"
-pptx-paser = "pptx_kb.cli_paser:main"
-pptx-html = "pptx_kb.gen_html:main"
-pptx-deck = "pptx_kb.build_deck:main"
+pptx-img = "pptx_wzq.cli_img:main"
+pptx-formula = "pptx_wzq.cli_formula:main"
+pptx-text = "pptx_wzq.cli_text:main"
+pptx-caption = "pptx_wzq.cli_caption:main"
+pptx-author = "pptx_wzq.cli_author:main"
+pptx-bind = "pptx_wzq.cli_bind:main"
+pptx-paser = "pptx_wzq.cli_paser:main"
+pptx-html = "pptx_wzq.gen_html:main"
+pptx-deck = "pptx_wzq.build_deck:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["pptx_kb*"]
+include = ["pptx_wzq*"]
 
 [tool.setuptools.package-data]
-pptx_kb = ["mtef_decoder/*.py"]
+pptx_wzq = ["mtef_decoder/*.py"]

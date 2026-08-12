@@ -7,7 +7,7 @@ cli_common.py — pptx-img / pptx-formula 公共 CLI 工具（方案 B 轻量形
 以及「--json 模式下吞掉核心库 print 状态输出」的上下文管理器。
 核心库 extract_pptx_images.py 保持原样，本文件不改动任何核心逻辑。
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063
 """
 from __future__ import annotations
 
@@ -17,14 +17,14 @@ import json
 import sys
 from pathlib import Path
 
-from pptx_kb import extract_pptx_images as E
+from pptx_wzq import extract_pptx_images as E
 
 # 退出码约定：0 成功 / 1 处理异常 / 2 参数或文件错误（沿用旧 CLI）
 EXIT_OK = 0
 EXIT_ERR = 1
 EXIT_USAGE = 2
 
-AUTHOR = "吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"
+AUTHOR = "吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"
 
 
 def banner(name: str) -> None:

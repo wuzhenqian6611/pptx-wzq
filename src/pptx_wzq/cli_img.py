@@ -16,7 +16,7 @@ cli_img.py — pptx-img：PPTX 图片解析 CLI（方案 B 薄壳 + v5 过滤）
 启动时先做环境检查（Pillow / YOLO 引擎与本地权重 / LibreOffice）。
 退出码：0 成功 / 1 处理异常 / 2 参数或文件错误。
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"""
 from __future__ import annotations
 
 import argparse
@@ -28,10 +28,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from pptx_kb import extract_pptx_images as E
-from pptx_kb import img_filter
-from pptx_kb import pptrender
-from pptx_kb.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
+from pptx_wzq import extract_pptx_images as E
+from pptx_wzq import img_filter
+from pptx_wzq import pptrender
+from pptx_wzq.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
                         make_progress, print_json, quiet_stdout,
                         resolve_input, resolve_output,
                         banner, banner_end)

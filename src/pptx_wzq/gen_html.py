@@ -8,7 +8,7 @@
 公式用 MathJax v3（CDN）渲染 $...$/$$...$$；图片 base64 内嵌，
 单文件可随处打开。
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"""
 from __future__ import annotations
 
 import argparse

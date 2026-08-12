@@ -1,6 +1,6 @@
-# pptx-kb · PPT 多模态教学知识库自动化构建
+# pptx-wzq · PPT 多模态教学知识库自动化构建
 
-> **作者：吴振谦（宁波大学科学技术学院教务部）· wuzhenqian@nbu.edu.cn**
+> **作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063**
 > 本项目帮助高校教师把教学 PPT 自动转化为图文并茂的多模态教学知识库。
 
 把一份教学 PPT 自动转化为**可检索、可复用、可再加工**的多模态教学知识库：
@@ -22,8 +22,8 @@ PPT(.pptx)
 ## 安装
 
 ```bash
-pip install pptx-kb            # 核心
-pip install "pptx-kb[ocr]"     # 含本地公式 OCR（pix2tex，可选）
+pip install pptx-wzq            # 核心
+pip install "pptx-wzq[ocr]"     # 含本地公式 OCR（pix2tex，可选）
 ```
 
 Windows 下会自动安装 pywin32（用于 PowerPoint 渲染矢量图）。

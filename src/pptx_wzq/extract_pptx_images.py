@@ -46,7 +46,7 @@ extract_pptx_images.py — 通用 PPTX 图片提取器（基于 OOXML 标准，v
   python extract_pptx_images.py input.pptx --latex --no-eq3   # [v4] 关闭 EQ3 解析路径
   python extract_pptx_images.py input.pptx --latex --no-ocr   # [v4] 关闭数学 OCR（仍渲染+裁剪）
 
-作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
+作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063"""
 from __future__ import annotations
 
 import argparse
@@ -999,7 +999,7 @@ def _make_eq3_converter():
     兜底，整体不崩溃（与既有优雅降级行为一致）。
     """
     try:
-        from pptx_kb.mtef_decoder import eq3_ole_bytes_to_latex
+        from pptx_wzq.mtef_decoder import eq3_ole_bytes_to_latex
     except Exception:
         # 兜底：确保脚本同目录在 sys.path（以脚本方式运行时通常已在）
         import os
@@ -1008,7 +1008,7 @@ def _make_eq3_converter():
         if _here not in sys.path:
             sys.path.insert(0, _here)
         try:
-            from pptx_kb.mtef_decoder import eq3_ole_bytes_to_latex
+            from pptx_wzq.mtef_decoder import eq3_ole_bytes_to_latex
         except Exception:
             return None
 
