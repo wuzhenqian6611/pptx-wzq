@@ -45,7 +45,8 @@ extract_pptx_images.py — 通用 PPTX 图片提取器（基于 OOXML 标准，v
   python extract_pptx_images.py input.pptx --latex            # [v4] 额外导出 <名>_formulas.md（三路径公式 LaTeX 汇总）
   python extract_pptx_images.py input.pptx --latex --no-eq3   # [v4] 关闭 EQ3 解析路径
   python extract_pptx_images.py input.pptx --latex --no-ocr   # [v4] 关闭数学 OCR（仍渲染+裁剪）
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse

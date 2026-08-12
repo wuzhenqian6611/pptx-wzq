@@ -13,7 +13,8 @@
 
 启动环境检查（stderr，不阻断）：Python / lxml 或标准库 ET。
 退出码：0 成功 / 1 处理异常 / 2 参数或文件错误。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +24,8 @@ from pathlib import Path
 from pptx_kb import extract_texts as T
 from pptx_kb.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
                         make_progress, print_json, quiet_stdout,
-                        resolve_input, resolve_output)
+                        resolve_input, resolve_output,
+                        banner, banner_end)
 
 VERSION = "pptx-text 1.0.0 (方案B薄壳)"
 
@@ -92,7 +94,10 @@ def _main(argv=None) -> int:
 
 
 def main() -> int:  # console
-    return _main()
+    banner("pptx-text")
+    rc = _main()
+    banner_end("pptx-text")
+    return rc
 
 
 if __name__ == "__main__":

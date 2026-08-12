@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pptx-kb 使用手册 · PPT 多模态教学知识库自动化构建</title>
+<style>
+:root{--navy:#1a3a5c;--accent:#ed7d31;--bg:#eef3f9;--card:#fff;--ink:#22303f;--muted:#5c6b82;--line:#d4deea;--mist:#f4f8ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Noto Serif SC","Songti SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.9}
+.cover{background:linear-gradient(135deg,#1a3a5c,#0d2a4d);color:#fff;padding:70px 30px 48px;text-align:center;border-bottom:5px solid var(--accent)}
+.cover h1{font-size:38px;letter-spacing:2px}
+.cover .sub{margin-top:12px;font-size:16px;opacity:.9}
+.cover .author{margin-top:22px;font-size:14px;opacity:.85}
+.wrap{max-width:960px;margin:0 auto;padding:8px 24px 70px}
+section{margin:38px 0}
+h2.sec{color:var(--navy);font-size:24px;border-left:6px solid var(--accent);padding-left:13px;margin-bottom:16px}
+h3{color:var(--navy);font-size:18px;margin:18px 0 8px}
+h4{color:#2b497f;margin:14px 0 6px}
+p{margin:9px 0;text-align:justify}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:12px 0;box-shadow:0 3px 12px rgba(10,40,80,.06)}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+th{background:var(--navy);color:#fff;padding:8px 10px;text-align:left}
+td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fbfe}
+code{background:#eef3f9;padding:1px 6px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em;color:#2b497f}
+pre{background:#0f2440;color:#d6e4ff;border-radius:10px;padding:14px 18px;overflow-x:auto;font-size:13px;line-height:1.7;margin:10px 0}
+.step{display:flex;gap:12px;margin:10px 0}
+.step .no{flex:none;width:30px;height:30px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+.case{border-left:4px solid var(--accent);background:var(--mist);border-radius:0 10px 10px 0;padding:12px 16px;margin:12px 0}
+.warn{border-left:4px solid #c00000;background:#fdeee4;border-radius:0 10px 10px 0;padding:12px 16px;margin:12px 0}
+ul,ol{margin:8px 0 8px 26px}
+li{margin:4px 0}
+footer{text-align:center;color:var(--muted);font-size:12.5px;padding:26px 20px 44px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header class="cover">
+  <h1>pptx-kb 使用手册</h1>
+  <div class="sub">PPT 多模态教学知识库自动化构建 · 从下载安装到进阶应用</div>
+  <div class="author">作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）</div>
+</header>
+<div class="wrap">
+
+<section>
+<h2 class="sec">零、关于本工具与作者</h2>
+<div class="card">
+<p><strong>作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）</strong></p>
+<p><strong>开发原因</strong>：高校教师在课程建设与教材建设中，长期面临「课件里的大量图片、公式、文本散落各处，难以整理为规范、可复用、图文并茂的教学资源」的痛点——手工整理一份课程的图文知识库往往要耗费数周。作者开发本工具，目的就是<strong>把 PPT 自动转化为图文并茂的多模态教学知识库</strong>，让教师从机械的整理工作中解放出来，把精力聚焦到教学设计本身。</p>
+<p><strong>开发时间与周期</strong>：本项目历经需求分析、核心提取引擎开发、AI 加工链路（图片理解/教材文案）、整体编排与打包发布等阶段，从初版原型到 v1.0.0 可安装发行版，累计开发周期约 1 个月（持续迭代中）。</p>
+<p><strong>后续开发计划</strong>：① 在现有 PPT 知识库基础上，新增<strong>微课视频分析能力</strong>——自动提取视频中的讲解音频（语音转写）、画面关键帧与字幕时间轴，与 PPT 页面/知识点对齐，形成「音视频 + 图文」融合的多模态知识库构建工具；② 支持更多输入格式（PDF/Word 讲义）；③ 提供图形界面与 Web 服务化部署。</p>
+</div>
+</section>
+
+<section>
+<h2 class="sec">一、它能做什么（工作流程总览）</h2>
+<div class="card">
+<p>输入一份教学 PPT（.pptx），自动完成 6 步流水线：</p>
+<div class="step"><div class="no">1</div><div>图片提取+过滤：识别全部图片/背景/填充，按教学判据去噪，矢量图（WMF）识别与 PowerPoint 渲染</div></div>
+<div class="step"><div class="no">2</div><div>公式提取：OMML / 公式编辑器 / OCR 三路径 → LaTeX 公式文档</div></div>
+<div class="step"><div class="no">3</div><div>文本提取：逐页文本框/表格/标题，排除页眉页脚</div></div>
+<div class="step"><div class="no">4</div><div>图片 AI 解读：每张图结合该页文本/公式，从教材角度解读（消耗 Token）</div></div>
+<div class="step"><div class="no">5</div><div>教材文案：DeepSeek 大模型生成每页 300 字以上教材口吻文案（消耗 Token）</div></div>
+<div class="step"><div class="no">6</div><div>图文绑定：每页文案与该页图片关系绑定为 JSON；并可一键导出教材 HTML / 教学 Deck</div></div>
+</div>
+</section>
+
+<section>
+<h2 class="sec">二、环境要求与下载</h2>
+<div class="card">
+<h4>系统要求</h4>
+<ul>
+<li>Windows 10/11（强烈建议；矢量渲染依赖本机 PowerPoint 与 pywin32）</li>
+<li>Python 3.9 及以上（官网下载：python.org → Downloads → Windows installer，安装时勾选 "Add Python to PATH"）</li>
+<li>建议已安装 Microsoft Office PowerPoint（用于矢量图 WMF 渲染，缺失时自动降级）</li>
+</ul>
+<h4>下载方式</h4>
+<ol>
+<li><strong>GitHub 下载源码</strong>：访问 <code>https://github.com/&lt;你的用户名&gt;/pptx-kb</code> → Code → Download ZIP，解压到本地；</li>
+<li><strong>或 pip 安装发行版</strong>（发布到 PyPI 后）：<code>pip install pptx-kb</code></li>
+</ol>
+</div>
+</section>
+
+<section>
+<h2 class="sec">三、安装</h2>
+<div class="card">
+<pre># 方式 A：从源码安装（推荐开发者）
+cd pptx-kb
+pip install -e .
+
+# 方式 B：附带本地公式 OCR 组件（可选，零费用识别）
+pip install -e ".[ocr]"
+
+# 查看是否安装成功（9 个命令均可使用）
+pptx-img --version
+pptx-paser --version</pre>
+<p>安装时会自动拉取依赖：Pillow（图像处理）、openai（大模型接口）、olefile（公式 OLE 解包）、ultralytics（YOLO 图片过滤）、omml2latex（公式转 LaTeX）、pywin32（Windows 矢量渲染）。</p>
+</div>
+</section>
+
+<section>
+<h2 class="sec">四、获取 API-KEY（两个大模型）</h2>
+<div class="card">
+<p>本工具使用<strong>两个大模型</strong>，各司其职：</p>
+<table>
+<tr><th>模型</th><th>平台</th><th>用在哪个环节</th><th>作用</th></tr>
+<tr><td><strong>qwen3.7-plus</strong>（通义千问视觉大模型）</td><td>阿里云百炼</td><td>第 4 步「图片 AI 解读」、公式图片识别</td><td>理解图片内容，输出教材角度的图片解读（图片类型/内容理解/教学用途），识别公式图为 LaTeX</td></tr>
+<tr><td><strong>deepseek-v4-flash</strong>（DeepSeek 文本大模型）</td><td>DeepSeek 开放平台</td><td>第 5 步「教材文案生成」、学科自动判断</td><td>把文本+公式+图片理解三份文档融合，生成每页 300 字以上教材口吻文案；判断课程/专业名称</td></tr>
+</table>
+
+<h4>① 阿里云百炼 API-KEY（qwen3.7-plus）</h4>
+<div class="step"><div class="no">1</div><div>打开 <code>https://www.qianwenai.com/</code>（通义千问官网）→ 右上角「登录」，可用支付宝/淘宝账号快速登录；</div></div>
+<div class="step"><div class="no">2</div><div>进入后，若需开通 API 服务，按引导进入<strong>阿里云百炼</strong>（bailian.console.aliyun.com）→ 开通「百炼」模型服务；</div></div>
+<div class="step"><div class="no">3</div><div>在百炼控制台右上角头像 → 「API-KEY」→ 「创建新的 API-KEY」→ 复制保存（形如 <code>sk-xxxxxxxx</code>）；</div></div>
+<div class="step"><div class="no">4</div><div>新用户一般有免费额度；计费按 Token，具体以官网为准。</div></div>
+
+<h4>② DeepSeek API-KEY（deepseek-v4-flash）</h4>
+<div class="step"><div class="no">1</div><div>打开 <code>https://www.deepseek.com/</code> → 右上角「登录/注册」（支持手机号或邮箱）；</div></div>
+<div class="step"><div class="no">2</div><div>登录后进入「开放平台」（platform.deepseek.com）→ 左侧菜单「API Keys」→ 「创建 API Key」→ 复制保存；</div></div>
+<div class="step"><div class="no">3</div><div>DeepSeek 新用户通常赠送一定额度；按 Token 计费，价格透明。</div></div>
+
+<div class="warn"><strong>设置环境变量（重要）</strong>：把两个 Key 写入系统环境变量（PowerShell 执行，需重开命令行生效）：
+<pre>setx DEEPSEEK_API_KEY "sk-你的DeepSeek密钥"
+setx DASHSCOPE_API_KEY "sk-你的百炼密钥"</pre>
+或者：右键「此电脑」→ 属性 → 高级系统设置 → 环境变量 → 新建用户变量。
+<strong>也可以不手动设置</strong>：运行 <code>pptx-paser</code> 时会自动检查，缺失则打印注册引导并交互式输入、自动写入。</div>
+</div>
+</section>
+
+<section>
+<h2 class="sec">五、使用（快速开始）</h2>
+<div class="card">
+<pre># 一条命令跑完整流水线（自动装依赖 / 检查 Key / 预估 Token / 询问确认）
+pptx-paser 第九章功率放大电路.pptx -o output
+
+# 执行完成后，结果目录 output 下：
+#   images/                教学图片集（PNG）
+#   &lt;名&gt;_captions.md    图片理解文档
+#   &lt;名&gt;_textbook.md    教材文案
+#   &lt;名&gt;_binding.json   图文绑定
+
+# 导出教材 HTML（浏览器打开即阅读，公式 MathJax 渲染）
+pptx-html output -o output/第九章.html
+
+# 导出教学 Deck（教育蓝图风格横版演示）
+pptx-deck --dir output --template 模板路径 --out output/deck.html
+
+# 分步执行与断点续跑
+pptx-img 课件.pptx -o out                # 只看图片提取
+pptx-formula 课件.pptx -o out            # 只提取公式
+pptx-caption out/images -o cap.md --texts out/texts.md --formulas out/formulas.md
+pptx-paser 课件.pptx -o out --skip img,formula,text   # 跳过已完成步骤续跑</pre>
+</div>
+</section>
+
+<section>
+<h2 class="sec">六、应用场景</h2>
+<div class="case"><h4>课程知识内容体系构建</h4><p>对全部章节课件跑流水线，按 binding.json 聚合出「章→节→知识点→公式+配图」的知识树，直接用于课程大纲、资源包、知识图谱。</p></div>
+<div class="case"><h4>个性化学习内容生成</h4><p>学生测验错题 → 知识点标签 → 检索对应教材文案/公式/图片 → 大模型融合学情生成个性化讲解与变式练习（基础版/进阶版）。</p></div>
+<div class="case"><h4>教材二次开发与多形态出版</h4><p>以 textbook.md 为内容源重组章节，导出教材 HTML（网页/打印）、教学 Deck、Word/PDF；图片公式独立资产，支持双语与无障碍再加工。</p></div>
+<div class="case"><h4>智能问答与 RAG 检索</h4><p>binding.json 作结构化索引：问题→检索相关页→图文并茂答案，自动标注「第 X 页、见下图」。</p></div>
+</section>
+
+<section>
+<h2 class="sec">七、常见问题</h2>
+<div class="card">
+<ul>
+<li><strong>提示 No module named 'pythoncom'</strong>：cmd 所用 Python 缺 pywin32，执行 <code>pip install pywin32</code>；或直接用本工具自动安装。</li>
+<li><strong>公式识别用大模型还是本地？</strong>：默认本地 pix2tex（零费用），质量不佳时可 <code>--ocr-engine qwen</code> 切大模型。</li>
+<li><strong>Token 消耗太多？</strong>：执行前会估算并确认；可用 <code>--skip</code> 跳过耗 Token 步骤，公式识别切本地。</li>
+<li><strong>WMF 矢量图浏览器打不开？</strong>：本工具已用 PowerPoint 自动渲染为 PNG 收录进 images/。</li>
+<li><strong>LibreOffice 没装？</strong>：公式路径 3 降级，OMML/EQ3 两路径不受影响。</li>
+</ul>
+</div>
+</section>
+
+</div>
+<footer>pptx-kb 使用手册 · 作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）<br>本手册与工具一同开源，供高校教师与教育技术工作者使用</footer>
+</body>
+</html>

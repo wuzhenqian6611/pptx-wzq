@@ -31,7 +31,8 @@
     - --pages 用于小批量测试：只把目标页内容传给模型并只生成这些页。
 
 退出码：0 成功 / 1 处理异常 / 2 参数或环境错误。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,8 @@ import time
 from pathlib import Path
 
 from pptx_kb.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
-                        make_progress, print_json, quiet_stdout)
+                        make_progress, print_json, quiet_stdout,
+                        banner, banner_end)
 
 VERSION = "pptx-author 1.2.0 (方案B薄壳)"
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -582,7 +584,10 @@ def _main(argv=None) -> int:
 
 
 def main() -> int:  # console
-    return _main()
+    banner("pptx-author")
+    rc = _main()
+    banner_end("pptx-author")
+    return rc
 
 
 if __name__ == "__main__":

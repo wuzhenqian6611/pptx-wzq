@@ -6,6 +6,8 @@ cli_common.py — pptx-img / pptx-formula 公共 CLI 工具（方案 B 轻量形
 两个薄壳脚本共享：路径归一化（转调核心库）、退出码约定、--json 输出、
 以及「--json 模式下吞掉核心库 print 状态输出」的上下文管理器。
 核心库 extract_pptx_images.py 保持原样，本文件不改动任何核心逻辑。
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）
 """
 from __future__ import annotations
 
@@ -21,6 +23,18 @@ from pptx_kb import extract_pptx_images as E
 EXIT_OK = 0
 EXIT_ERR = 1
 EXIT_USAGE = 2
+
+AUTHOR = "吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"
+
+
+def banner(name: str) -> None:
+    """命令运行开始横幅（打印到 stderr）。"""
+    print(f"\n===== {name} · 作者：{AUTHOR} =====", file=sys.stderr)
+
+
+def banner_end(name: str) -> None:
+    """命令运行结束横幅（打印到 stderr）。"""
+    print(f"===== {name} 完成 · 作者：{AUTHOR} =====\n", file=sys.stderr)
 
 
 def resolve_input(path_arg: str):

@@ -26,7 +26,8 @@ img_filter.py — PPTX 提取图的教学用途过滤（规则层 + YOLO 层）
 
 被过滤的图移动到 <out>/discarded/ 子目录（可审计、可恢复），
 取舍明细写入 <out>/filter_report.json。不修改 manifest 16 列协议。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import json

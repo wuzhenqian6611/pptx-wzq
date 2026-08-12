@@ -12,7 +12,8 @@ cli_formula.py — pptx-formula：PPTX 公式解析 CLI（方案 B 薄壳）
 路径3 LO 渲染+xfrm 裁剪+数学 OCR）由核心库 extract_latex() 执行，本脚本仅做
 参数映射、依赖探测提示与结果输出。核心函数体零改动。
 退出码：0 成功 / 1 处理异常 / 2 参数或文件错误。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse
@@ -21,7 +22,8 @@ import sys
 from pptx_kb import extract_pptx_images as E
 from pptx_kb.cli_common import (EXIT_ERR, EXIT_OK, EXIT_USAGE,
                         make_progress, print_json, quiet_stdout,
-                        resolve_input, resolve_output)
+                        resolve_input, resolve_output,
+                        banner, banner_end)
 
 VERSION = "pptx-formula 2.0.0 (方案B薄壳+v5符号判据过滤)"
 
@@ -81,6 +83,7 @@ def _check_env(args) -> None:
 
 
 def main(argv=None) -> int:
+    banner("pptx-formula")
     ap = argparse.ArgumentParser(
         prog="pptx-formula",
         description="PPTX 公式解析：三路径级联把全部公式以 LaTeX 汇总为 <名>_formulas.md")
@@ -127,6 +130,7 @@ def main(argv=None) -> int:
     except Exception as e:  # 核心库内部已优雅降级，此处兜底
         print(f"[错误] 公式提取失败：{e}", file=sys.stderr)
         return EXIT_ERR
+    banner_end("pptx-formula")
     return EXIT_OK
 
 

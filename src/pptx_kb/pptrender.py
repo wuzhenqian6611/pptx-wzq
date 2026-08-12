@@ -12,7 +12,8 @@ LibreOffice 单文件转换 WMF 会输出整页空白）。
     - 每个 WMF 放一张空白幻灯片，AddPicture 后 Slide.Export 导出 PNG；
     - scale 为放大倍数（WMF 逻辑尺寸 × scale 像素导出，公式/线条清晰）；
     - 全部渲染结束后关闭演示文稿并退出 PowerPoint。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import sys

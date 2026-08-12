@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""build_deck.py — 用 edu-blueprint 风格把 binding 内容重构成横版教材 deck。"""
+"""build_deck.py — 用 edu-blueprint 风格把 binding 内容重构成横版教材 deck。
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 import base64
 import json
 import re

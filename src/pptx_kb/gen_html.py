@@ -7,7 +7,8 @@
 数据来源：<名>_binding.json（每页文案+图片列表+图注）+ images/（PNG）。
 公式用 MathJax v3（CDN）渲染 $...$/$$...$$；图片 base64 内嵌，
 单文件可随处打开。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse
@@ -297,7 +298,10 @@ def _main(argv=None) -> int:
 
 
 def main() -> int:  # console
-    return _main()
+    banner("pptx-html")
+    rc = _main()
+    banner_end("pptx-html")
+    return rc
 
 
 if __name__ == "__main__":

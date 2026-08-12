@@ -21,7 +21,8 @@
               [--json] [--version]
 
 退出码：0 成功 / 1 处理异常 / 2 参数或环境错误。
-"""
+
+作者：吴振谦（宁波大学科学技术学院教务部 · wuzhenqian@nbu.edu.cn）"""
 from __future__ import annotations
 
 import argparse
@@ -188,7 +189,10 @@ def _main(argv=None) -> int:
 
 
 def main() -> int:  # console
-    return _main()
+    banner("pptx-bind")
+    rc = _main()
+    banner_end("pptx-bind")
+    return rc
 
 
 if __name__ == "__main__":
