@@ -8,3 +8,4 @@ venv/
 *.pt
 yolov5*.pt
 .pytest_cache/
+_*.py
