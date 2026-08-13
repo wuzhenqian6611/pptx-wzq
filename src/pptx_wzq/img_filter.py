@@ -235,7 +235,10 @@ def load_yolo(model_path="auto"):
         return None
     try:
         if model_path == "auto":
-            cands = [Path("yolov5su.pt"), Path("yolov5s.pt"), Path("yolov5n.pt"),
+            # 优先使用随包内置权重（src/pptx_wzq/weights/），再探测外部文件
+            bundled = Path(__file__).parent / "weights" / "yolov5su.pt"
+            cands = ([bundled] if bundled.is_file() else []) + [
+                     Path("yolov5su.pt"), Path("yolov5s.pt"), Path("yolov5n.pt"),
                      Path.home() / "weights" / "yolov5s.pt",
                      Path.home() / "weights" / "yolov5n.pt"]
             hit = next((c for c in cands if c.is_file()), None)

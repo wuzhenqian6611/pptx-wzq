@@ -48,4 +48,4 @@ where = ["src"]
 include = ["pptx_wzq*"]
 
 [tool.setuptools.package-data]
-pptx_wzq = ["mtef_decoder/*.py"]
+pptx_wzq = ["mtef_decoder/*.py", "weights/*.pt"]
