@@ -9,3 +9,4 @@ venv/
 yolov5*.pt
 .pytest_cache/
 _*.py
+pptx_wzq-*/
