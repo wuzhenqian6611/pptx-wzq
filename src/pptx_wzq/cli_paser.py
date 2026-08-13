@@ -79,7 +79,7 @@ PIP_DEPS = [
     ("win32com", "pywin32", "PowerPoint 渲染 WMF（公式识别/矢量转PNG）", True),
     ("olefile", "olefile", "公式 OLE 解包（路径2）", True),
     ("ultralytics", "ultralytics", "YOLO 图片过滤", True),
-    ("omml2latex", "omml2latex", "OMML 原生公式→LaTeX（路径1）", False),
+    ("omml2latex", "omml2latex", "OMML 原生公式→LaTeX（路径1）", True),
     ("pix2tex", "pix2tex[latex]", "公式 OCR 兜底（路径3/公式识别）", False),
 ]
 
