@@ -45,6 +45,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from pptx_wzq.cli_common import banner, banner_end
@@ -182,23 +183,45 @@ def _ensure_keys() -> bool:
     return False
 
 
-def _run_step(name: str, script: str, args_list: list, cwd: Path) -> None:
-    """用当前 Python 运行子指令。
+def _dir_summary(path: Path) -> str:
+    """目录统计：文件数 + 总大小。"""
+    if not path.is_dir():
+        return "（未生成）"
+    files = [f for f in path.rglob("*") if f.is_file()]
+    total = sum(f.stat().st_size for f in files)
+    unit = "KB" if total < 1048576 else "MB"
+    size = total / 1024 if unit == "KB" else total / 1048576
+    return f"{len(files)} 个文件（{size:.1f} {unit}）"
 
-    script 为模块名（如 "cli_img"）时用 python -m pptx_wzq.cli_img 调用，
-    兼容「pip 安装」与「源码目录开发」两种环境；不再依赖 cwd 存在脚本文件。
+
+def _run_step(name: str, script: str, args_list: list, cwd: Path,
+              desc: str = "", resource: str = "", outs: list | None = None,
+              idx: int = 0, total: int = 6) -> None:
+    """用当前 Python 运行子指令，并在执行前后打印：
+
+    工作内容（desc）/ 消耗资源（resource）/ 执行耗时 / 产生结果（outs 产物统计）。
     """
-    print(f"\n========== 步骤：{name} ==========", file=sys.stderr)
+    print(f"\n========== 步骤 {idx}/{total}：{name} ==========", file=sys.stderr)
+    if desc:
+        print(f"[工作内容] {desc}", file=sys.stderr)
+    if resource:
+        print(f"[消耗资源] {resource}", file=sys.stderr)
+    t0 = time.monotonic()
     if script.endswith(".py"):
         cmd = [sys.executable, script] + [str(a) for a in args_list]
     else:
         cmd = [sys.executable, "-m", f"pptx_wzq.{script}"] + \
             [str(a) for a in args_list]
     r = subprocess.run(cmd, cwd=str(cwd))
+    cost = time.monotonic() - t0
     if r.returncode != 0:
         raise RuntimeError(f"步骤「{name}」失败（exit={r.returncode}），"
                            f"命令：{' '.join(map(str, cmd))}")
-    print(f"========== 步骤完成：{name} ==========\n", file=sys.stderr)
+    print(f"========== 步骤完成：{name} ==========", file=sys.stderr)
+    print(f"[结果] 耗时 {cost:.1f} 秒", file=sys.stderr)
+    for o in (outs or []):
+        print(f"       {o} → {_dir_summary(Path(o))}", file=sys.stderr)
+    print("", file=sys.stderr)
 
 
 def _organize(out: Path, work: Path, stem: str) -> None:
@@ -402,22 +425,54 @@ def _main(argv=None) -> int:
     work = out / "_proc"
     try:
         if "img" not in skip:
-            _run_step("图片提取+过滤+图片集",
-                      "cli_img", [pptx, "-o", work / "img"], ".")
+            _run_step(
+                "图片提取+过滤+图片集", "cli_img",
+                [pptx, "-o", work / "img"], ".",
+                desc="解析 PPT 包内全部图片类对象（<p:pic> 图片 / 形状填充 / "
+                     "页面背景 / OLE 公式 / 图表）→ 按教学判据三路过滤（尺寸过小、"
+                     "比例过限、纯色、孤立碎片 + YOLO 教学语义）→ 位图封装 WMF "
+                     "识别与 PowerPoint 渲染（公式版补提 LaTeX、曲线版转 PNG）→ "
+                     "生成教学图片集",
+                resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
+                         "PowerPoint 渲染",
+                outs=[work / "img" / "images"], idx=1)
         if "formula" not in skip:
-            _run_step("公式提取",
-                      "cli_formula", [pptx, "-o", work / "formula"], ".")
+            _run_step(
+                "公式提取", "cli_formula",
+                [pptx, "-o", work / "formula"], ".",
+                desc="遍历全部公式对象，三路径级联转为 LaTeX：路径1 原生 OMML "
+                     "（omml2latex）→ 路径2 Equation.3 公式编辑器（MTEF 解码）→ "
+                     "路径3 渲染 + 数学 OCR（缺失时降级为占位，不崩溃）→ 按页输出 "
+                     "<名>_formulas.md，并以符号判据过滤误识别碎片",
+                resource="本地计算（0 Token）· 依赖 omml2latex / olefile / "
+                         "mtef_decoder；OCR 可选",
+                outs=[work / "formula"], idx=2)
         if "text" not in skip:
-            _run_step("文本提取",
-                      "cli_text", [pptx, "-o", work / "text"], ".")
+            _run_step(
+                "文本提取", "cli_text",
+                [pptx, "-o", work / "text"], ".",
+                desc="逐页提取文本框 / 表格 / 标题占位符文本，排除页眉、页脚与 "
+                     "页码；输出 ID|类型|文本 清单 <名>_texts.md（标题条目将用于 "
+                     "教材 HTML 章节命名）",
+                resource="本地计算（0 Token）· 仅依赖 Python 标准库 XML 解析",
+                outs=[work / "text"], idx=3)
         if "caption" not in skip:
-            _run_step("图片 AI 解读（文档上下文模式）",
-                      "cli_caption",
-                      [work / "img" / "images", "-o",
-                       work / "cap" / "captions.md",
-                       "--texts", work / "text" / f"{stem}_texts.md",
-                       "--formulas", work / "formula" / f"{stem}_formulas.md"],
-                      ".")
+            _run_step(
+                "图片 AI 解读（文档上下文模式）", "cli_caption",
+                [work / "img" / "images", "-o",
+                 work / "cap" / "captions.md",
+                 "--texts", work / "text" / f"{stem}_texts.md",
+                 "--formulas", work / "formula" / f"{stem}_formulas.md"],
+                ".",
+                desc="先由前几页文本让模型判断课程/专业名，再对 images/ 每张图 "
+                     "附带「该页文本+公式」上下文喂入视觉大模型 qwen3.7-plus，"
+                     "从教材角度输出 100~200 字图片理解（图片类型 / 内容理解 / "
+                     "教学用途）→ <名>_captions.md；损坏图预检跳过、失败自动重试、"
+                     "增量落盘",
+                resource=f"消耗 Token（约 {len(list((work/'img'/'images').glob('*.png')))} "
+                         f"张图 × 每张约 1~2K token）· 视觉模型 qwen3.7-plus "
+                         f"（DASHSCOPE_API_KEY）",
+                outs=[work / "cap"], idx=4)
         if "author" not in skip:
             au = ["--texts", work / "text" / f"{stem}_texts.md",
                   "--formulas", work / "formula" / f"{stem}_formulas.md",
@@ -425,14 +480,28 @@ def _main(argv=None) -> int:
                   "-o", work / f"{stem}_textbook.md"]
             if args.author_pages:
                 au += ["--pages", args.author_pages]
-            _run_step("教材文案生成", "cli_author", au, ".")
+            _run_step(
+                "教材文案生成", "cli_author", au, ".",
+                desc="学科自动推断（模型判断课程/专业名填入提示词）→ 将文本、"
+                     "公式、图片理解三份文档全文输入 DeepSeek 大模型 "
+                     "deepseek-v4-flash，生成每页 ≥300 字的教材口吻文案（不遗漏"
+                     "任何一页、任何公式）→ <名>_textbook.md；超长自动分批合并、"
+                     "防截断",
+                resource="消耗 Token（输入=三份文档全文，输出≈页数×约 600 字）· "
+                         "文本模型 deepseek-v4-flash（DEEPSEEK_API_KEY）",
+                outs=[work], idx=5)
         if "bind" not in skip:
-            _run_step("图文关系绑定",
-                      "cli_bind",
-                      [work, "-o", out / f"{stem}_binding.json",
-                       "--textbook", work / f"{stem}_textbook.md",
-                       "--images-dir", work / "img" / "images",
-                       "--captions", work / "cap" / "captions.md"], ".")
+            _run_step(
+                "图文关系绑定", "cli_bind",
+                [work, "-o", out / f"{stem}_binding.json",
+                 "--textbook", work / f"{stem}_textbook.md",
+                 "--images-dir", work / "img" / "images",
+                 "--captions", work / "cap" / "captions.md"], ".",
+                desc="把每页教材文案与该页图片及解读绑定为结构化 JSON（按页 "
+                     "page / text / images[{file,caption}] / has_image 组织），"
+                     "作为检索、知识图谱与个性化学习的索引基石",
+                resource="本地计算（0 Token）",
+                outs=[work / "img" / "images"], idx=6)
 
         # 4) 产物归位
         _organize(out, work, stem)
