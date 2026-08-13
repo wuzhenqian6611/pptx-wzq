@@ -296,6 +296,8 @@ def _compose(P, D, slides, A):
 
 
 def main() -> int:  # console
+    from pptx_wzq.cli_common import banner, banner_end
+    banner("pptx-deck")
     import argparse
     ap = argparse.ArgumentParser(prog="pptx-deck",
                                  description="生成教育蓝图风格教学 Deck")
@@ -367,6 +369,7 @@ def main() -> int:  # console
     print(f"[OK] deck 已生成：{OUT}  ({OUT.stat().st_size//1024} KB, {len(slides)} 张滑片)")
 
 
+    banner_end("pptx-deck")
     return 0
 
 

@@ -18,6 +18,8 @@ import re
 import sys
 from pathlib import Path
 
+from pptx_wzq.cli_common import banner, banner_end
+
 
 # --------------------------------------------------------------------------
 # Markdown 轻量 → HTML（保留 $ 公式给 MathJax）

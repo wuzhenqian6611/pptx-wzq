@@ -47,6 +47,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pptx_wzq.cli_common import banner, banner_end
+
 VERSION = "PPT-Paser 2.1.0 (整体编排+确认+汇报+自动装依赖)"
 
 PROC_DIR = "过程文件"
