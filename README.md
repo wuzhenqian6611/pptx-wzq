@@ -30,6 +30,10 @@ Windows 下会自动安装 pywin32（用于 PowerPoint 渲染矢量图）。
 首次运行 `pptx-paser` 会自动补齐缺失组件、检查 API Key
 （DeepSeek / 阿里云百炼）并引导注册。
 
+> **权重来源与许可**：图片过滤内置的 YOLO 模型权重 `yolov5su.pt`
+> 来自 [ultralytics](https://github.com/ultralytics/ultralytics)（YOLO 官方），
+> 采用 **AGPL-3.0** 许可证随包分发；商用或闭源使用请自行评估其开源条款。
+
 ## 快速开始
 
 ```bash

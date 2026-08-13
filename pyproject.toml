@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pptx-wzq"
-version = "1.0.4"
+version = "1.0.5"
 description = "PPT 多模态教学知识库自动化构建：图片/公式/文本提取 → 图片AI解读 → 教材文案 → 图文绑定 → 教材HTML/Deck"
 readme = "README.md"
 requires-python = ">=3.9"
