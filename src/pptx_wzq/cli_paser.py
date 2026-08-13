@@ -183,9 +183,17 @@ def _ensure_keys() -> bool:
 
 
 def _run_step(name: str, script: str, args_list: list, cwd: Path) -> None:
-    """用当前 Python 运行子指令脚本。"""
+    """用当前 Python 运行子指令。
+
+    script 为模块名（如 "cli_img"）时用 python -m pptx_wzq.cli_img 调用，
+    兼容「pip 安装」与「源码目录开发」两种环境；不再依赖 cwd 存在脚本文件。
+    """
     print(f"\n========== 步骤：{name} ==========", file=sys.stderr)
-    cmd = [sys.executable, script] + [str(a) for a in args_list]
+    if script.endswith(".py"):
+        cmd = [sys.executable, script] + [str(a) for a in args_list]
+    else:
+        cmd = [sys.executable, "-m", f"pptx_wzq.{script}"] + \
+            [str(a) for a in args_list]
     r = subprocess.run(cmd, cwd=str(cwd))
     if r.returncode != 0:
         raise RuntimeError(f"步骤「{name}」失败（exit={r.returncode}），"
@@ -395,16 +403,16 @@ def _main(argv=None) -> int:
     try:
         if "img" not in skip:
             _run_step("图片提取+过滤+图片集",
-                      "cli_img.py", [pptx, "-o", work / "img"], ".")
+                      "cli_img", [pptx, "-o", work / "img"], ".")
         if "formula" not in skip:
             _run_step("公式提取",
-                      "cli_formula.py", [pptx, "-o", work / "formula"], ".")
+                      "cli_formula", [pptx, "-o", work / "formula"], ".")
         if "text" not in skip:
             _run_step("文本提取",
-                      "cli_text.py", [pptx, "-o", work / "text"], ".")
+                      "cli_text", [pptx, "-o", work / "text"], ".")
         if "caption" not in skip:
             _run_step("图片 AI 解读（文档上下文模式）",
-                      "cli_caption.py",
+                      "cli_caption",
                       [work / "img" / "images", "-o",
                        work / "cap" / "captions.md",
                        "--texts", work / "text" / f"{stem}_texts.md",
@@ -417,10 +425,10 @@ def _main(argv=None) -> int:
                   "-o", work / f"{stem}_textbook.md"]
             if args.author_pages:
                 au += ["--pages", args.author_pages]
-            _run_step("教材文案生成", "cli_author.py", au, ".")
+            _run_step("教材文案生成", "cli_author", au, ".")
         if "bind" not in skip:
             _run_step("图文关系绑定",
-                      "cli_bind.py",
+                      "cli_bind",
                       [work, "-o", out / f"{stem}_binding.json",
                        "--textbook", work / f"{stem}_textbook.md",
                        "--images-dir", work / "img" / "images",
