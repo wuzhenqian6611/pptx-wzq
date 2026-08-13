@@ -64,7 +64,7 @@ def _check_env(args) -> None:
     checks = [
         ("olefile（路径2 OLE 解包必需）", u.find_spec("olefile") is not None),
         ("mtef_decoder（路径2 MTEF 解码，随命令内置）",
-         u.find_spec("pptx_wzq.mtef_decoder") is not None),
+         u.find_spec("mtef_decoder") is not None),
         ("omml2latex（路径1 OMML→LaTeX）",
          E._make_latex_converter() is not None),
         ("pix2tex（路径3 数学 OCR）",
