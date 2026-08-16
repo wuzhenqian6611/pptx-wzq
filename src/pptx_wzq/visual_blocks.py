@@ -51,6 +51,11 @@ CLUSTER_CONFIG = {
     "max_blocks_per_slide": 6, # 一页最多输出块数
     "page_w": 960,             # 幻灯片标准宽 px（16:9 参考，用于越界过滤）
     "page_h": 720,             # 幻灯片标准高 px
+    # 文本密度判据（用户准则：可视逻辑块内文本框应为短标签）
+    "max_shape_text": 10,      # 单个 shape 文本 >10 字 → 视为潜在正文文本框，
+                               # 不参与聚类（逻辑图节点/标注通常字少）
+    "max_block_text": 30,      # 聚类后块内文本总量 >30 字 → 判定混入了文本区，
+                               # 剔除长文本成员并重组块
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -142,6 +147,8 @@ class VisualBlock:
     member_obj_ids: list = field(default_factory=list)
     page: int = 0
     is_single: bool = False
+    text_density: float = 0.0   # 文字空间密度：块内文本字符数 / 块面积(px²)
+                                # 高密度=文本区，低密度=逻辑图/图（判据）
 
     @property
     def center(self) -> dict:
@@ -626,6 +633,13 @@ def extract_blocks(pptx_path: str, out_dir: str,
         objs = [o for o in objs
                 if 0 <= o.bbox["x"] + o.bbox["w"] / 2 <= pw and
                 0 <= o.bbox["y"] + o.bbox["h"] / 2 <= ph]
+        # 文本密度判据（用户准则）：可视逻辑块内文本框应为短标签。
+        # 单个 shape 文本 > max_shape_text 字 → 视为潜在正文文本框，
+        # 不参与聚类（逻辑图节点/箭头标注通常字少）
+        max_shape_text = cfg.get("max_shape_text", 10)
+        objs = [o for o in objs
+                if not (o.kind == "shape" and
+                        len((o.text or "").strip()) > max_shape_text)]
         if not objs:
             slides_out.append({"page": page_no, "blocks": [], "relations": []})
             continue
@@ -639,6 +653,18 @@ def extract_blocks(pptx_path: str, out_dir: str,
         blocks = []
         for ci, cl in enumerate(clusters, start=1):
             blk_id = f"blk_{ci:02d}"
+            # 块级文本密度校验：块内文本总量 > max_block_text 字 →
+            # 判定混入了正文文本区，剔除长文本成员后重组块（剩余成员
+            # 若仍为 1 个有效可视化对象则保留为单对象块）
+            max_block_text = cfg.get("max_block_text", 30)
+            total_text = sum(len((o.text or "").strip())
+                             for o in cl if o.kind in ("shape", "connector"))
+            if total_text > max_block_text:
+                cl = [o for o in cl
+                      if not (o.kind in ("shape", "connector") and
+                              len((o.text or "").strip()) > max_shape_text)]
+            if not cl:
+                continue
             min_x = min(o.bbox["x"] for o in cl)
             min_y = min(o.bbox["y"] for o in cl)
             max_x = max(o.bbox["x"] + o.bbox["w"] for o in cl)
@@ -655,6 +681,11 @@ def extract_blocks(pptx_path: str, out_dir: str,
             block.block_type = _guess_block_type(cl)
             block.internal_structure = _infer_topology(cl)
             block.semantic_description = _fallback_description(block)
+            # 文字空间密度：块内文本字符数 / 块面积（px²），放大 1e6 便于阅读
+            _area = max(1.0, bbox["w"] * bbox["h"])
+            _chars = sum(len((o.text or "").strip())
+                         for o in cl if o.kind in ("shape", "connector"))
+            block.text_density = round(_chars / _area * 1_000_000, 3)
             blocks.append(block)
 
         # VLM 增强（可选）
