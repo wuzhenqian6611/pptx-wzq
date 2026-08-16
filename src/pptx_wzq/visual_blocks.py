@@ -45,10 +45,12 @@ BLOCK_TYPE_ALL = {
 # 空间聚类参数（方案 §5.1）
 CLUSTER_CONFIG = {
     "min_area": 1600,          # 40x40 px，小于此视为噪声（但保留文本对象）
-    "alpha_h": 1.5,            # 水平邻近系数
-    "alpha_v": 1.5,            # 垂直邻近系数
-    "max_gap_px": 60,          # 绝对最大间距
+    "alpha_h": 1.0,            # 水平邻近系数（原 1.5，链式误并过多）
+    "alpha_v": 1.0,            # 垂直邻近系数（原 1.5）
+    "max_gap_px": 40,          # 绝对最大间距（原 60，收紧防远距串并）
     "max_blocks_per_slide": 6, # 一页最多输出块数
+    "page_w": 960,             # 幻灯片标准宽 px（16:9 参考，用于越界过滤）
+    "page_h": 720,             # 幻灯片标准高 px
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -184,21 +186,17 @@ def _union_find_cluster(objects: list[AtomicObject],
         for j in range(i + 1, n):
             bj = bbox_of(objects[j])
             cj = (bj["x"] + bj["w"] / 2, bj["y"] + bj["h"] / 2)
-            # 水平/垂直距离（按各自高度归一）
-            dx = abs(ci[0] - cj[0]) - (bi["w"] + bj["w"]) / 2
-            dy = abs(ci[1] - cj[1]) - (bi["h"] + bj["h"]) / 2
-            max_h = max(bi["h"], bj["h"], 1)
-            # 水平方向邻近：中心水平距离 < alpha * max_h 且垂直有重叠（间隙小）
-            h_ok = dx < cfg["alpha_h"] * max_h + cfg["max_gap_px"]
-            v_ok = dy < cfg["alpha_v"] * max_h + cfg["max_gap_px"]
-            # 垂直方向邻近：中心垂直距离 < alpha * max_h 且水平有重叠
-            h_ov = dx <= 0 or dx < 0.5 * max_h
-            v_ov = dy <= 0 or dy < 0.5 * max_h
-            # 重叠（IoU 概念）强制连边
-            overlap = bi["w"] > 0 and bj["w"] > 0 and \
-                dx < 0 and dy < 0 and \
-                (bi["w"] + bj["w"]) / 2 > 0 and (bi["h"] + bj["h"]) / 2 > 0
-            if overlap or (h_ok and v_ov) or (v_ok and h_ov):
+            # 边缘间隙（≥0）：中心距减去两对象尺寸的一半
+            gap_x = max(0.0, abs(ci[0] - cj[0]) - (bi["w"] + bj["w"]) / 2)
+            gap_y = max(0.0, abs(ci[1] - cj[1]) - (bi["h"] + bj["h"]) / 2)
+            # 恒定间隙阈值（不受对象高度放大，防大对象链式串并）
+            gap_max = cfg["max_gap_px"]
+            h_close = gap_x <= gap_max      # 水平间隙小
+            v_close = gap_y <= gap_max      # 垂直间隙小
+            h_ov = gap_x == 0               # 水平有重叠（含包含）
+            v_ov = gap_y == 0               # 垂直有重叠（含包含）
+            # 合并条件：双向重叠 或 一个方向重叠+另一方向间隙小
+            if (h_ov and v_ov) or (h_ov and v_close) or (v_ov and h_close):
                 union(i, j)
 
     groups = {}
@@ -614,11 +612,20 @@ def extract_blocks(pptx_path: str, out_dir: str,
     slides_out = []
     for page_no in sorted(by_page_objs):
         objs = _filter_noise(by_page_objs[page_no], cfg)
+        # 剔除页面文本区（标题/正文/副标题等占位符 shape）：它们不属于
+        # 可视逻辑块（内容已由文本提取步骤保留），否则大文本框会与
+        # 页内图片/形状互相重叠导致整页合并成 1 块
+        objs = [o for o in objs if o.kind != "text_region"]
         # 剔除无几何对象（bbox 宽或高 ≤0，如内联 OMML 公式无独立区域）：
         # 它们无法参与空间聚类、无法渲染成块图；内容由公式提取步骤保留
         objs = [o for o in objs
                 if (o.bbox or {}).get("w", 0) > 0 and
                 (o.bbox or {}).get("h", 0) > 0]
+        # 剔除越界/装饰对象：中心落在页面外（如 x=-18 的页外 shape）
+        pw, ph = cfg.get("page_w", 960), cfg.get("page_h", 720)
+        objs = [o for o in objs
+                if 0 <= o.bbox["x"] + o.bbox["w"] / 2 <= pw and
+                0 <= o.bbox["y"] + o.bbox["h"] / 2 <= ph]
         if not objs:
             slides_out.append({"page": page_no, "blocks": [], "relations": []})
             continue

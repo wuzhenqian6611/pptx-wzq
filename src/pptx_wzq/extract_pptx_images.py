@@ -457,9 +457,10 @@ def iter_charts(slide_xml: bytes):
 # 原子对象：原生 shape / 连接符 / 表格 / 文本框（可视逻辑块的数据地基）
 # --------------------------------------------------------------------------
 def iter_native_shapes(slide_xml: bytes):
-    """扫描全部 <p:sp>（含文本框/形状/图形），返回 (shape_name, text, xfrm, z_index)。
+    """扫描全部 <p:sp>（含文本框/形状/图形），返回 (shape_name, text, xfrm, z_index, ph_type)。
     用于可视逻辑块的空间聚类；注意过滤掉已被 <p:pic>/<p:oleObj>/<p:graphicFrame> 覆盖的对象。
-    不含图片填充的纯形状（如箭头、矩形、圆）也会输出。"""
+    不含图片填充的纯形状（如箭头、矩形、圆）也会输出。ph_type 用于识别标题/正文占位符
+    （title/ctrTitle/subTitle/body 等），这些是页面文本区而非可视逻辑块。"""
     root = ET.fromstring(slide_xml)
     for idx, sp in enumerate(root.iter(SP)):
         # 跳过已被独立图片对象处理的形状（<p:pic> 内部也有 <p:sp>）
@@ -473,7 +474,11 @@ def iter_native_shapes(slide_xml: bytes):
         xfrm = _find_xfrm(sp)
         if xfrm is None:
             continue
-        yield name or f"Shape{idx}", text, xfrm, idx
+        ph_type = ""
+        for ph in sp.iter(q("p", "ph")):
+            ph_type = ph.get("type", "obj")
+            break
+        yield name or f"Shape{idx}", text, xfrm, idx, ph_type
 
 
 def iter_connectors(slide_xml: bytes):
@@ -596,16 +601,23 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "children": [],
             })
     # 原生 shape（文本框/图形）
-    for name, text, xfrm, z in iter_native_shapes(slide_xml):
+    # 标题/正文/副标题等占位符 → kind="text_region"（页面文本区，不参与
+    # 可视逻辑块聚类；它们的内容已由文本提取步骤完整保留）
+    TEXT_REGION_PH = {"title", "ctrTitle", "subTitle", "body", "obj"}
+    for name, text, xfrm, z, ph_type in iter_native_shapes(slide_xml):
         if not text and not name:
             continue
+        kind = "shape"
+        if ph_type in TEXT_REGION_PH:
+            kind = "text_region"
         objs.append({
             "obj_id": f"s{page_no:02d}_sp{z:03d}",
-            "page": page_no, "kind": "shape",
+            "page": page_no, "kind": kind,
             "shape_name": name, "text": text,
             "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
             "source_media": "", "output_file": "",
             "original_format": "", "children": [],
+            "ph_type": ph_type,
         })
     # 连接符（箭头线）
     for name, text, xfrm, z, s_id, e_id in iter_connectors(slide_xml):
