@@ -369,10 +369,10 @@ def _is_adjacent(a: AtomicObject, b: AtomicObject,
     - 左右相邻：水平间隙 ≤ 阈值 且 垂直方向有重叠/接近；
     - 上下相邻：垂直间隙 ≤ 阈值 且 水平方向有重叠/接近；
     阈值：双方都有文本（短标签，如表格单元格/框图节点）时放宽为
-    text_gap（默认 gap_max*2.5），因为这类对象倾向于同属一个结构
+    text_gap（默认 gap_max），因为这类对象倾向于同属一个结构
     （表格/流程图），间距可能大于纯图形的 40px。"""
     if text_gap is None:
-        text_gap = gap_max * 2.5
+        text_gap = gap_max
     thr = text_gap if (a.text.strip() and b.text.strip()) else gap_max
     ax0, ay0 = a.bbox["x"], a.bbox["y"]
     ax1, ay1 = ax0 + a.bbox["w"], ay0 + a.bbox["h"]
@@ -879,6 +879,17 @@ def extract_blocks(pptx_path: str, out_dir: str,
     atomic = [AtomicObject.from_dict(d) for d in atomic_objects]
     page_texts = page_texts or {}
     cfg = {**CLUSTER_CONFIG, **(config or {})}
+    # 硬编码修复：用真实页面尺寸（sldSz）覆盖 960×720 参考值——
+    # 16:9 页面（1280×720）若按 960×720 算，越界判定会把中心 x>960 的
+    # 页面右侧有效对象误剔，且横幅/大图/碎片等比例类阈值偏差 33%
+    try:
+        from pptx_wzq import extract_pptx_images as _E
+        _cx, _cy = _E.read_sld_size(str(pptx_path))
+        if _cx and _cy:
+            cfg["page_w"] = _cx / 914400 * 96
+            cfg["page_h"] = _cy / 914400 * 96
+    except Exception:  # pragma: no cover
+        pass
     out_dir = Path(out_dir)
 
     by_page_objs = {}

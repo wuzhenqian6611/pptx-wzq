@@ -208,6 +208,8 @@ def _main(argv=None) -> int:
                     help=f"API Key 环境变量名（默认 {DEFAULT_KEY_ENV}）")
     ap.add_argument("--no-vlm", action="store_true",
                     help="不调用 VLM，纯规则聚类/模板描述（0 Token）")
+    ap.add_argument("--render-dpi", type=int, default=150,
+                    help="块渲染图分辨率 dpi（默认 150）")
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：已有 visual_blocks.json 时保留完成页")
     ap.add_argument("--json", action="store_true",
@@ -271,7 +273,8 @@ def _main(argv=None) -> int:
         # 避免每个块重复跑 LibreOffice（237 块 × 整页渲染会极慢）
         from pptx_wzq import extract_pptx_images as E
         cache = Path(args.pptx).parent / ".render_cache"
-        pages = E.render_pptx_pages(str(args.pptx), cache, dpi=150)
+        render_dpi = getattr(args, "render_dpi", 150)
+        pages = E.render_pptx_pages(str(args.pptx), cache, dpi=render_dpi)
         # 真实页面尺寸（EMU）：16:9 等非常规比例必须传入，否则裁剪
         # 按 4:3 默认值换算会把块的左侧内容切掉（战略管理实测）
         sld_cx, sld_cy = E.read_sld_size(str(args.pptx))
@@ -283,7 +286,8 @@ def _main(argv=None) -> int:
                     if img_path.is_file():
                         n_rendered += 1
                         continue
-                    ok = _crop_block_png(pages, s["page"], blk, img_path, 150,
+                    ok = _crop_block_png(pages, s["page"], blk, img_path,
+                                         render_dpi,
                                          sld_cx=sld_cx, sld_cy=sld_cy)
                     if ok:
                         n_rendered += 1
@@ -319,7 +323,7 @@ def _main(argv=None) -> int:
     binding = {
         "$schema": "pptx_multimodal_slide_v2.0",
         "stem": stem or out_dir.name,
-        "tool_version": "pptx-wzq 1.5.0",
+        "tool_version": "pptx-wzq " + __import__("pptx_wzq").__version__,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "slides": out_slides,
         "summary": summary,
