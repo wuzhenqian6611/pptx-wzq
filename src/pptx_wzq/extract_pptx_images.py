@@ -873,6 +873,25 @@ def emu_to_px(v, dpi):
     return int(round(int(v) * dpi / 914400.0))
 
 
+def read_sld_size(pptx_path) -> tuple:
+    """从 pptx 的 ppt/presentation.xml 读取页面尺寸 <p:sldSz cx cy>（EMU）。
+    返回 (cx, cy)；解析失败返回 (None, None)。crop_page_png 的裁剪换算
+    必须用真实页面尺寸（16:9 等非常规比例否则左侧会被切）。"""
+    try:
+        import re as _re
+        import zipfile
+        with zipfile.ZipFile(str(pptx_path)) as z:
+            xml = z.read("ppt/presentation.xml").decode("utf-8", "ignore")
+        m = _re.search(r'<p:sldSz[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"', xml)
+        if not m:
+            m = _re.search(r'<p:sldSz[^>]*\bcy="(\d+)"[^>]*\bcx="(\d+)"', xml)
+        if not m:
+            return None, None
+        return int(m.group(1)), int(m.group(2))
+    except Exception:  # pragma: no cover
+        return None, None
+
+
 def crop_page_png(page_png: Path, xfrm, dpi, out_png: Path,
                   sld_cx=None, sld_cy=None):
     """用 xfrm(EMU) 在整页渲染图上裁出对象区域，返回 (ok, w, h)。
@@ -928,8 +947,10 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
     atomic_objects: list = []
     n_vector_skipped = 0
     # 整页渲染缓存（惰性）：首次遇到需渲染的公式/图表时才调用 LibreOffice
+    _sld_cx0, _sld_cy0 = read_sld_size(str(pptx_path))
     render_ctx = {"pages": None, "pptx": str(pptx_path),
-                  "out": out_dir, "dpi": raster_dpi}
+                  "out": out_dir, "dpi": raster_dpi,
+                  "sld_cx": _sld_cx0, "sld_cy": _sld_cy0}
 
     with zipfile.ZipFile(pptx_path) as zf:
         if all_media:
@@ -1111,7 +1132,9 @@ def _emit_ole(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
     pages = _ensure_rendered(render_ctx)
     if pages is not None and (page_no - 1) < len(pages):
         png_path = out_base.with_suffix(".png")
-        ok, w, h = crop_page_png(pages[page_no - 1], xfrm, render_ctx["dpi"], png_path)
+        ok, w, h = crop_page_png(pages[page_no - 1], xfrm, render_ctx["dpi"],
+                                 png_path, sld_cx=render_ctx.get("sld_cx"),
+                                 sld_cy=render_ctx.get("sld_cy"))
         if ok:
             return ImageRecord(page_no, idx, "formula_ole", name,
                                posixpath.basename(target), png_path.name,
@@ -1187,7 +1210,9 @@ def _emit_chart(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
     pages = _ensure_rendered(render_ctx)
     if pages is not None and (page_no - 1) < len(pages):
         png_path = out_base.with_suffix(".png")
-        ok, w, h = crop_page_png(pages[page_no - 1], xfrm, render_ctx["dpi"], png_path)
+        ok, w, h = crop_page_png(pages[page_no - 1], xfrm, render_ctx["dpi"],
+                                 png_path, sld_cx=render_ctx.get("sld_cx"),
+                                 sld_cy=render_ctx.get("sld_cy"))
         if ok:
             return ImageRecord(page_no, idx, "chart", name,
                                posixpath.basename(target), png_path.name,

@@ -272,6 +272,9 @@ def _main(argv=None) -> int:
         from pptx_wzq import extract_pptx_images as E
         cache = Path(args.pptx).parent / ".render_cache"
         pages = E.render_pptx_pages(str(args.pptx), cache, dpi=150)
+        # 真实页面尺寸（EMU）：16:9 等非常规比例必须传入，否则裁剪
+        # 按 4:3 默认值换算会把块的左侧内容切掉（战略管理实测）
+        sld_cx, sld_cy = E.read_sld_size(str(args.pptx))
         if pages:
             for s in slides:
                 for blk in s["blocks"]:
@@ -280,7 +283,8 @@ def _main(argv=None) -> int:
                     if img_path.is_file():
                         n_rendered += 1
                         continue
-                    ok = _crop_block_png(pages, s["page"], blk, img_path, 150)
+                    ok = _crop_block_png(pages, s["page"], blk, img_path, 150,
+                                         sld_cx=sld_cx, sld_cy=sld_cy)
                     if ok:
                         n_rendered += 1
 
@@ -335,9 +339,12 @@ def _block_type_counter(slides: list) -> dict:
 
 
 def _crop_block_png(pages: list, page_no: int, blk: dict,
-                    out_png: Path, dpi: int = 150) -> bool:
+                    out_png: Path, dpi: int = 150,
+                    sld_cx=None, sld_cy=None) -> bool:
     """从整页渲染结果中按块 bbox 裁剪出 PNG（px→EMU）。
-    块 bbox 无效（宽或高为 0）时返回 False（无坐标无法裁剪）。"""
+    块 bbox 无效（宽或高为 0）时返回 False（无坐标无法裁剪）。
+    sld_cx/sld_cy：真实页面尺寸（EMU），缺失时 crop_page_png 按 4:3
+    默认值换算——16:9 等非常规页面会把块的左侧内容切掉，必须传入。"""
     try:
         from pptx_wzq import extract_pptx_images as E
         if (page_no - 1) >= len(pages):
@@ -347,7 +354,8 @@ def _crop_block_png(pages: list, page_no: int, blk: dict,
             return False
         xfrm = (int(b["x"] / 96 * 914400), int(b["y"] / 96 * 914400),
                 int(b["w"] / 96 * 914400), int(b["h"] / 96 * 914400))
-        ok, _, _ = E.crop_page_png(pages[page_no - 1], xfrm, dpi, out_png)
+        ok, _, _ = E.crop_page_png(pages[page_no - 1], xfrm, dpi, out_png,
+                                   sld_cx=sld_cx, sld_cy=sld_cy)
         return bool(ok)
     except Exception:
         return False

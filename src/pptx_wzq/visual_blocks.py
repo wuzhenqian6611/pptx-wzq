@@ -678,18 +678,21 @@ def _guess_block_type(members: list[AtomicObject]) -> str:
 def render_block_to_png(slide_page: int, block: VisualBlock,
                         pptx_path: str, out_png: Path, dpi: int = 150) -> bool:
     """用整页渲染 + bbox 裁剪渲染单块为 PNG（复用 extract_pptx_images 的
-    render_pptx_pages / crop_page_png）。返回是否成功。"""
+    render_pptx_pages / crop_page_png）。返回是否成功。
+    自动读取真实页面尺寸（EMU）传入裁剪，避免 16:9 页面左侧被切。"""
     try:
         from pptx_wzq import extract_pptx_images as E
         cache = Path(pptx_path).parent / ".render_cache"
         pages = E.render_pptx_pages(str(pptx_path), cache, dpi=dpi)
         if not pages or (slide_page - 1) >= len(pages):
             return False
+        sld_cx, sld_cy = E.read_sld_size(str(pptx_path))
         xfrm = (int(block.bbox["x"] / 96 * 914400),
                 int(block.bbox["y"] / 96 * 914400),
                 int(block.bbox["w"] / 96 * 914400),
                 int(block.bbox["h"] / 96 * 914400))
-        return E.crop_page_png(pages[slide_page - 1], xfrm, dpi, out_png)
+        return E.crop_page_png(pages[slide_page - 1], xfrm, dpi, out_png,
+                               sld_cx=sld_cx, sld_cy=sld_cy)
     except Exception as e:
         print(f"[渲染] 块 {block.block_id} 渲染失败：{e}", file=sys.stderr)
         return False
