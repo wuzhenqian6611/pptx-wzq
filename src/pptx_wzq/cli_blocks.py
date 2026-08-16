@@ -288,6 +288,24 @@ def _main(argv=None) -> int:
                     if ok:
                         n_rendered += 1
 
+    # 兜底清理：images/ 只保留 JSON 中可视逻辑块对应的渲染图
+    # （块编号随规则变化后，旧图/无结构引用图必须移除，保证目录与
+    # JSON 双向一致——缺失 0、多余 0）
+    want = {f"slide_{s['page']:02d}_{blk['block_id']}.png"
+            for s in slides for blk in s["blocks"]}
+    removed = 0
+    for old in image_dir.glob("slide_*_blk_*.png"):
+        if old.name not in want:
+            try:
+                old.unlink()
+                removed += 1
+            except OSError as e:
+                print(f"[警告] 清理未被 JSON 引用的渲染图失败："
+                      f"{old.name}（{e}）", file=sys.stderr)
+    if removed:
+        print(f"[渲染] 清理未被 JSON 引用的渲染图 {removed} 张",
+              file=sys.stderr)
+
     # 组装最终 JSON
     out_slides = _assemble_slides(slides, page_texts, page_formulas,
                                   args.pptx, stem, image_dir, out_dir / "sources")

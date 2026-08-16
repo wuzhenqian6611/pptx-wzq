@@ -453,6 +453,12 @@ def _filter_noise(objects: list[AtomicObject],
         w, h = b.get("w", 0), b.get("h", 0)
         area = w * h
         text = (o.text or "").strip()
+        # 方案A：公式（OLE/OMML）一律不参与可视逻辑块——公式属于文本流
+        # 内容，已由公式提取步骤（formulas.md）完整保留；且公式对象普遍
+        # 带 output_file（提取落盘产物），若不在此前置剔除会绕过下方
+        # 面积过滤被当作"主内容"保留，导致公式区域被圈进可视逻辑块。
+        if o.kind == "formula":
+            continue
         # 有文本 → 保留（逻辑图节点/箭头标注，即使小）
         if text:
             out.append(o)
