@@ -325,6 +325,7 @@ def _main(argv=None) -> int:
     # semantic_description——expression_goal/role/features 等真实语义内容，
     # 覆盖规则回退模板；不依赖视觉模型，原料=块结构+该页文本/公式）
     n_enriched = 0
+    n_rels = 0
     if args.semantic_model:
         sem_key = os.environ.get(args.semantic_key_env, "")
         if not sem_key:
@@ -338,8 +339,12 @@ def _main(argv=None) -> int:
                 n_enriched = VB.enrich_semantics(
                     sem_client, args.semantic_model, out_slides,
                     page_texts, page_formulas)
+                n_rels = VB.enrich_relations(
+                    sem_client, args.semantic_model, out_slides,
+                    page_texts, page_formulas)
                 print(f"[语义] DeepSeek 生成 {n_enriched} 个块的 "
-                      f"semantic_description", file=sys.stderr)
+                      f"semantic_description、{n_rels} 条跨模态关系",
+                      file=sys.stderr)
             except Exception as e:
                 print(f"[警告] 语义增强失败：{e}", file=sys.stderr)
     summary = {
@@ -349,6 +354,7 @@ def _main(argv=None) -> int:
             1 for s in out_slides if s["visual_blocks"]),
         "block_types": _block_type_counter(out_slides),
         "semantics_enriched": n_enriched,
+        "relations_enriched": n_rels,
     }
     binding = {
         "$schema": "pptx_multimodal_slide_v2.0",

@@ -912,6 +912,101 @@ def enrich_semantics(client, model: str, slides: list, page_texts: dict,
     return enriched
 
 
+# 跨模态关系增强提示词（用户要求：图文关联内容也由 DeepSeek 生成真实
+# 逻辑关系，覆盖规则回退模板——原料=该页文字 + 块的 semantic_description）
+RELATION_ENRICH_SYSTEM = (
+    "你是高校教材建设专家。下面给出一页 PPT 的正文文字与其中一个可视逻辑块"
+    "（由像素图/矢量图/形状/文本框/箭头组成的可视化对象集合）的语义描述。"
+    "请找出该块与正文中哪句话（或哪几句）语义关联最强，输出 JSON：\n"
+    "{\n"
+    "  \"text_anchor\": \"正文中与该块关联最强的原句（原样引用，≤60字）\",\n"
+    "  \"relation_type\": \"elaboration|title_caption|contrast|example|"
+    "data_presentation\"（选一个最贴切的）,\n"
+    "  \"semantic_link\": \"该块与这句文字的逻辑关系陈述，约50字（≤120字）\"\n"
+    "}\n"
+    "只输出 JSON，不要任何前缀或解释。"
+)
+
+
+def enrich_relations(client, model: str, slides: list, page_texts: dict,
+                     page_formulas: dict | None = None,
+                     on_progress=None) -> int:
+    """用 DeepSeek 生成每页 cross_modal_relations 的真实图文关联
+    （text_anchor / relation_type / semantic_link），覆盖规则回退模板。
+
+    输入原料（不依赖视觉模型）：
+      - 该页正文（textual_content.raw_text，含公式标记）；
+      - 目标块的 semantic_description（DeepSeek 增强后的表达目标/作用等）；
+      - 该页公式。
+
+    slides：_assemble_slides 后的结构——就地更新 s["cross_modal_relations"]。
+    无 client / 调用失败 / 返回非法时保留原值。返回增强关系数。
+    """
+    if client is None or not model:
+        return 0
+    enriched = 0
+    total = sum(len(s.get("cross_modal_relations") or []) for s in slides)
+    done = 0
+    for s in slides:
+        page = s.get("slide_info", {}).get("slide_index") or 0
+        raw = (s.get("textual_content") or {}).get("raw_text", "") or \
+            page_texts.get(page, "")
+        fm = page_formulas.get(page, "")
+        blk_by_id = {blk.get("block_id"): blk
+                     for blk in (s.get("visual_blocks") or [])}
+        for rel in s.get("cross_modal_relations") or []:
+            done += 1
+            if on_progress is not None:
+                try:
+                    on_progress(done, total, {"kind": "relations"})
+                except Exception:
+                    pass
+            try:
+                blk = blk_by_id.get(rel.get("target_block_id") or "")
+                if not blk:
+                    continue
+                sd = blk.get("semantic_description") or {}
+                prompt = (
+                    f"【页面正文】\n{raw[:1500]}\n"
+                    + (f"【该页公式】\n{fm[:300]}\n" if fm else "")
+                    + f"【可视逻辑块】\n"
+                      f"类型：{blk.get('block_type', '')}\n"
+                      f"表达目标：{sd.get('expression_goal', '')}\n"
+                      f"表达作用：{sd.get('expression_role', '')}\n"
+                      f"教学用途：{sd.get('teaching_use', '')}\n"
+                      "请输出该块与页面文字的关系 JSON。"
+                )
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": RELATION_ENRICH_SYSTEM},
+                        {"role": "user", "content": prompt}],
+                    stream=False,
+                    reasoning_effort="high",
+                    extra_body={"thinking": {"type": "enabled"}},
+                )
+                data = _safe_json(resp.choices[0].message.content or "")
+                if not data:
+                    continue
+                anchor = str(data.get("text_anchor", "") or "").strip()
+                link = str(data.get("semantic_link", "") or "").strip()
+                if not (anchor or link):
+                    continue
+                rtype = str(data.get("relation_type", "elaboration")).strip()
+                rel["text_anchor"] = anchor[:60]
+                rel["relation_type"] = rtype if rtype in (
+                    "elaboration", "title_caption", "contrast",
+                    "example", "data_presentation") else "elaboration"
+                rel["semantic_link"] = link[:120]
+                enriched += 1
+            except Exception as e:
+                print(f"[关系] {rel.get('relation_id')} 增强失败：{e}",
+                      file=sys.stderr)
+            if done % 10 == 0:
+                time.sleep(0.2)
+    return enriched
+
+
 def build_cross_modal_relations(blocks: list[VisualBlock],
                                 page_text: str,
                                 client=None, model: str = "",
