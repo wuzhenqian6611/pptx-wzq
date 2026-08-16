@@ -485,18 +485,23 @@ def _exec_step(step: str, args, work: Path, stem: str,
               "--formulas", work / "formula" / f"{stem}_formulas.md",
               "--pptx", pptx,
               "-o", work.parent / f"{stem}_visual_blocks.json",
-              "--captions", work.parent / f"{stem}_captions.md"]
+              "--captions", work.parent / f"{stem}_captions.md",
+              # DeepSeek 语义增强：本步骤用文本模型生成每个可视逻辑块的
+              # semantic_description（expression_goal/role/features/…）
+              "--semantic-model", "deepseek-v4-flash"]
         if action == "resume":
             bd.append("--resume")
         _run_step(
-            "可视逻辑块 JSON 组装（全栈解析 + 跨模态关系）",
+            "可视逻辑块 JSON 组装（全栈解析 + DeepSeek 语义增强 + 跨模态关系）",
             "cli_blocks", bd, ".",
             desc="按 pptx_multimodal_slide_v2.0 schema 组装 <名>_visual_blocks.json"
                  "（slide_info / textual_content / visual_blocks[] / "
-                 "cross_modal_relations[] / summary），并把块渲染图写入 images/、"
-                 "captions.md 写入结果目录",
-            resource="消耗 Token（跨模态关系：文本模型 deepseek-v4-flash，"
-                     "DEEPSEEK_API_KEY）",
+                 "cross_modal_relations[] / summary），调用 DeepSeek "
+                 "deepseek-v4-flash 生成每个块的 semantic_description "
+                 "（表达目标/作用/抽象特征/图文描述/教学用途），并把块渲染图"
+                 "写入 images/、captions.md 写入结果目录",
+            resource="消耗 Token（语义增强+跨模态关系：文本模型 "
+                     "deepseek-v4-flash，DEEPSEEK_API_KEY）",
             outs=[work / "blocks"], idx=idx, total=total)
 
 

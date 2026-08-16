@@ -803,6 +803,115 @@ def _fallback_description(block: VisualBlock) -> dict:
     }
 
 
+# DeepSeek 语义增强提示词（用户要求：图文绑定步骤用 LLM 生成/精炼
+# semantic_description，原料=块结构化信息 + 该页文本/公式 + 已有描述）
+SEMANTIC_SYSTEM = (
+    "你是高校教材建设专家。下面给出一个 PPT 页面中的一个\"可视逻辑块\""
+    "（由像素图/矢量图/形状/文本框/箭头组成的、表达一个主题逻辑的可视化"
+    "对象集合）的结构化信息：块类型、内部节点文本、占据页面比例、该页文字、"
+    "公式，以及该块已有的描述（如有）。请从教材角度输出该块的完整语义描述 "
+    "JSON：\n"
+    "{\n"
+    "  \"expression_goal\": \"该块要表达的教学主题/结论，一句话（≤40字）\",\n"
+    "  \"expression_role\": \"它如何帮助理解该页文字（如具象化/对比/流程演示/"
+    "数据呈现/电路示意），约50字（≤70字）\",\n"
+    "  \"expression_features\": [\"时序图\",\"流程图\",\"层次结构\",\"网格表格\","
+    "\"电路图\" 等抽象表达特征，2~5个词],\n"
+    "  \"vlm_caption\": \"对该块内容的教学性客观描述，100~200字\",\n"
+    "  \"teaching_use\": \"适用于什么课程/教学场景，30~60字\"\n"
+    "}\n"
+    "只输出 JSON，不要任何前缀或解释。"
+)
+
+
+def enrich_semantics(client, model: str, slides: list, page_texts: dict,
+                     page_formulas: dict,
+                     on_progress=None) -> int:
+    """用 DeepSeek（文本模型）为每个可视逻辑块的 semantic_description 生成
+    真实语义内容（expression_goal / expression_role / expression_features /
+    vlm_caption / teaching_use），覆盖规则回退模板。
+
+    输入原料（不依赖视觉模型）：
+      - 块类型、内部节点文本摘要、bbox 面积占比；
+      - 该页文字（textual_content.raw_text）与该页公式；
+      - 已有 semantic_description（若是 qwen 视觉生成的可直接精炼）。
+
+    slides：_assemble_slides 后的结构 [{slide_info, textual_content,
+    visual_blocks: [dict], ...}]——直接就地更新块的 semantic_description。
+    无 client / 调用失败 / 模型返回非法时保留原内容。返回增强块数。
+    """
+    if client is None or not model:
+        return 0
+    enriched = 0
+    total = sum(len(s.get("visual_blocks") or []) for s in slides)
+    done = 0
+    for s in slides:
+        page = s.get("slide_info", {}).get("slide_index") or s.get("page", 0)
+        raw = (s.get("textual_content") or {}).get("raw_text", "") or \
+            page_texts.get(page, "")
+        fm = page_formulas.get(page, "")
+        for blk in s.get("visual_blocks") or []:
+            done += 1
+            if on_progress is not None:
+                try:
+                    on_progress(done, total, {"kind": "semantics"})
+                except Exception:
+                    pass
+            try:
+                st = blk.get("internal_structure") or {}
+                node_texts = [n.get("text", "") for n in st.get("nodes", [])][:8]
+                node_texts = [t for t in node_texts if t.strip()]
+                bb = blk.get("bbox") or {}
+                old_sd = blk.get("semantic_description") or {}
+                prompt = (
+                    f"【块类型】{blk.get('block_type', '')}\n"
+                    f"【节点文本】{' / '.join(node_texts[:8]) or '（无文本标签）'}\n"
+                    f"【占据页面比例】块 {bb.get('w', 0):.0f}x{bb.get('h', 0):.0f}"
+                    f" px（约 {bb.get('w', 0)*bb.get('h', 0)/691200*100:.0f}% 页）\n"
+                    f"【该页文字】\n{raw[:1200]}\n"
+                    + (f"【该页公式】\n{fm[:500]}\n" if fm else "")
+                    + (f"【已有描述】\n{json.dumps(old_sd, ensure_ascii=False)[:400]}\n"
+                       if old_sd else "")
+                    + "请输出该块的语义描述 JSON。"
+                )
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "system", "content": SEMANTIC_SYSTEM},
+                              {"role": "user", "content": prompt}],
+                    stream=False,
+                    reasoning_effort="high",
+                    extra_body={"thinking": {"type": "enabled"}},
+                )
+                data = _safe_json(resp.choices[0].message.content or "")
+                if not data:
+                    continue
+                goal = str(data.get("expression_goal", "") or "").strip()
+                role = str(data.get("expression_role", "") or "").strip()
+                feats = data.get("expression_features") or []
+                cap = str(data.get("vlm_caption", "") or "").strip()
+                use = str(data.get("teaching_use", "") or "").strip()
+                if not (goal or role or cap):
+                    continue
+                blk["semantic_description"] = {
+                    "block_type": blk.get("block_type", ""),
+                    "expression_goal": goal or old_sd.get("expression_goal", ""),
+                    "expression_role": role or old_sd.get("expression_role", ""),
+                    "expression_features": [
+                        str(f)[:30] for f in feats if str(f).strip()][:5]
+                        or old_sd.get("expression_features", ["可视化"]),
+                    "vlm_caption": cap or old_sd.get("vlm_caption", ""),
+                    "teaching_use": use or old_sd.get("teaching_use",
+                                                      "教学辅助图示"),
+                }
+                enriched += 1
+            except Exception as e:
+                print(f"[语义] 块 {blk.get('block_id')} 增强失败：{e}",
+                      file=sys.stderr)
+            if done % 10 == 0:
+                time.sleep(0.2)
+    return enriched
+
+
 def build_cross_modal_relations(blocks: list[VisualBlock],
                                 page_text: str,
                                 client=None, model: str = "",

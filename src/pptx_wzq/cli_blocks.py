@@ -210,6 +210,14 @@ def _main(argv=None) -> int:
                     help="不调用 VLM，纯规则聚类/模板描述（0 Token）")
     ap.add_argument("--render-dpi", type=int, default=150,
                     help="块渲染图分辨率 dpi（默认 150）")
+    ap.add_argument("--semantic-model", default="",
+                    help="用 DeepSeek 文本模型生成 semantic_description "
+                         "（expression_goal/role/features/vlm_caption/"
+                         "teaching_use），如 deepseek-v4-flash；空=跳过")
+    ap.add_argument("--semantic-base-url", default="https://api.deepseek.com",
+                    help="语义模型端点（默认 DeepSeek）")
+    ap.add_argument("--semantic-key-env", default="DEEPSEEK_API_KEY",
+                    help="语义模型 API Key 环境变量名（默认 DEEPSEEK_API_KEY）")
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：已有 visual_blocks.json 时保留完成页")
     ap.add_argument("--json", action="store_true",
@@ -313,12 +321,34 @@ def _main(argv=None) -> int:
     # 组装最终 JSON
     out_slides = _assemble_slides(slides, page_texts, page_formulas,
                                   args.pptx, stem, image_dir, out_dir / "sources")
+    # DeepSeek 语义增强（用户要求：图文绑定/JSON 组装步骤用 LLM 生成
+    # semantic_description——expression_goal/role/features 等真实语义内容，
+    # 覆盖规则回退模板；不依赖视觉模型，原料=块结构+该页文本/公式）
+    n_enriched = 0
+    if args.semantic_model:
+        sem_key = os.environ.get(args.semantic_key_env, "")
+        if not sem_key:
+            print(f"[警告] 未设置 {args.semantic_key_env}，跳过 "
+                  f"semantic_description 增强", file=sys.stderr)
+        else:
+            try:
+                from openai import OpenAI
+                sem_client = OpenAI(api_key=sem_key,
+                                    base_url=args.semantic_base_url)
+                n_enriched = VB.enrich_semantics(
+                    sem_client, args.semantic_model, out_slides,
+                    page_texts, page_formulas)
+                print(f"[语义] DeepSeek 生成 {n_enriched} 个块的 "
+                      f"semantic_description", file=sys.stderr)
+            except Exception as e:
+                print(f"[警告] 语义增强失败：{e}", file=sys.stderr)
     summary = {
         "slides": len(out_slides),
         "blocks_total": sum(len(s["visual_blocks"]) for s in out_slides),
         "slides_with_blocks": sum(
             1 for s in out_slides if s["visual_blocks"]),
         "block_types": _block_type_counter(out_slides),
+        "semantics_enriched": n_enriched,
     }
     binding = {
         "$schema": "pptx_multimodal_slide_v2.0",

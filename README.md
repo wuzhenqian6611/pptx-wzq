@@ -68,7 +68,7 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 | `pptx-text` | 逐页文本/表格提取（排除页眉页脚），每条文本带 text_id 与幻灯片坐标 x/y/w/h | — | 0 |
 | `pptx-formula` | 公式三路径提取（OMML / EQ3-MTEF / OCR）→ LaTeX | — | 0 |
 | `pptx-img` | 图片提取 + 三路过滤 + WMF 识别/渲染 + 公式图片补提；Visio OLE 按容器存 `.vsdx`/`.vsd`；emf/wmf/svg 规范化 svg（失败回退 wmf）；记录幻灯片坐标；**收集原子对象（shape/connector/table → atomic_objects.json）** | — | 0 |
-| `pptx-blocks` | **可视逻辑块全栈解析**：空间聚类（并查集）把每页拆成 1~6 块 → 块渲染 PNG → VLM 判定块类型 + Semantic Captioning（表达目标/作用/特征/图文描述/教学用途）→ 图/树拓扑 → 跨模态关系 → `visual_blocks.json`（pptx_multimodal_slide_v2.0 schema）+ 块级 captions.md；`--no-vlm` 纯规则模式 | qwen3.7-plus | 有 |
+| `pptx-blocks` | **可视逻辑块全栈解析**：四向种子扩展区域生长把每页拆成 1~6 块 → 块渲染 PNG → 图/树拓扑 → 跨模态关系 → `visual_blocks.json`（pptx_multimodal_slide_v2.0 schema）+ 块级 captions.md；`--semantic-model deepseek-v4-flash` 用 **DeepSeek 生成每块 semantic_description**（表达目标/作用/抽象特征/图文描述/教学用途）；`--no-vlm` 纯规则聚类 | deepseek-v4-flash / qwen3.7-plus | 有 |
 | `pptx-caption` | （旧）图片 AI 解读——已并入 `pptx-blocks`，保留兼容 | qwen3.7-plus | 有 |
 | `pptx-related` | 可视逻辑块相关性过滤：DeepSeek 判定块与正文是否相关，无关块（logo/作者/单位/项目类别/重复装饰等）连同解读一并删除，写审计 json | deepseek-v4-flash | 有 |
 | `pptx-author` | 教材文案（学科推断 + 整文生成 + 自适应分批）；某页原文超 300 字直接提取不扩写（`--no-expand-threshold`） | deepseek-v4-flash | 有 |
