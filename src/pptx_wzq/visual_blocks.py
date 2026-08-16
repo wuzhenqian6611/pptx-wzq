@@ -48,6 +48,8 @@ CLUSTER_CONFIG = {
     "alpha_h": 1.0,            # 水平邻近系数（原 1.5，链式误并过多）
     "alpha_v": 1.0,            # 垂直邻近系数（原 1.5）
     "max_gap_px": 40,          # 绝对最大间距（原 60，收紧防远距串并）
+    "text_gap_px": 100,        # 双方都有文本（短标签）时的放宽间距
+                               # （表格单元格/框图节点倾向于同属一个结构）
     "max_blocks_per_slide": 6, # 一页最多输出块数
     "page_w": 960,             # 幻灯片标准宽 px（16:9 参考，用于越界过滤）
     "page_h": 720,             # 幻灯片标准高 px
@@ -353,6 +355,75 @@ def _split_big_objects(objs: list, cfg: dict) -> tuple:
         else:
             rest.append(o)
     return big, rest
+
+
+def _is_adjacent(a: AtomicObject, b: AtomicObject,
+                 gap_max: float, text_gap: float = None) -> bool:
+    """四向邻接判定：a、b 是否可生长连接。
+    规则（方向区分）：
+    - 左右相邻：水平间隙 ≤ 阈值 且 垂直方向有重叠/接近；
+    - 上下相邻：垂直间隙 ≤ 阈值 且 水平方向有重叠/接近；
+    阈值：双方都有文本（短标签，如表格单元格/框图节点）时放宽为
+    text_gap（默认 gap_max*2.5），因为这类对象倾向于同属一个结构
+    （表格/流程图），间距可能大于纯图形的 40px。"""
+    if text_gap is None:
+        text_gap = gap_max * 2.5
+    thr = text_gap if (a.text.strip() and b.text.strip()) else gap_max
+    ax0, ay0 = a.bbox["x"], a.bbox["y"]
+    ax1, ay1 = ax0 + a.bbox["w"], ay0 + a.bbox["h"]
+    bx0, by0 = b.bbox["x"], b.bbox["y"]
+    bx1, by1 = bx0 + b.bbox["w"], by0 + b.bbox["h"]
+    gap_x = max(ax0, bx0) - min(ax1, bx1)      # >0 分离，≤0 重叠
+    gap_y = max(ay0, by0) - min(ay1, by1)
+    # 左右相邻：水平间隙小 且 垂直有重叠或接近
+    if gap_x <= thr and gap_y <= gap_max:
+        return True
+    # 上下相邻：垂直间隙小 且 水平有重叠或接近
+    if gap_y <= thr and gap_x <= gap_max:
+        return True
+    return False
+
+
+def _region_grow(objects: list, cfg: dict) -> list:
+    """四向种子扩展区域生长（用户准则：从种子对象出发，沿四个方向扩展，
+    遇到"字多文本对象（墙）"或页面边界即停止）。
+
+    与"全局聚类+凸分割"的本质区别：
+    - 加法生长：从每个未访问种子开始 BFS 四向扩展，把紧邻对象并入同一
+      区域；表格/框图单元格四向紧邻 → 自然长成一片，不会被切碎；
+    - 文本墙：>max_shape_text 字的对象是"墙"，既不作为种子也不被并入
+      （生长碰到它即停止），凹区域天然被墙/间隙阻断成多个区域，
+      无需凸分割；
+    - 每页对象多时按空间顺序取种子，避免重复遍历。
+    """
+    max_shape_text = cfg.get("max_shape_text", 10)
+    gap_max = cfg.get("max_gap_px", 40)
+    text_gap = cfg.get("text_gap_px", gap_max * 2.5)
+    walls = {o.obj_id for o in objects
+             if len((o.text or "").strip()) > max_shape_text}
+    members = [o for o in objects if o.obj_id not in walls]
+    # 种子按 z_index 排序（从底层对象开始生长，稳定输出顺序）
+    members.sort(key=lambda o: o.z_index)
+
+    regions = []
+    visited = set()
+    for seed in members:
+        if seed.obj_id in visited:
+            continue
+        region = []
+        stack = [seed]
+        visited.add(seed.obj_id)
+        while stack:
+            cur = stack.pop()
+            region.append(cur)
+            for other in members:
+                if other.obj_id in visited or other.obj_id in walls:
+                    continue
+                if _is_adjacent(cur, other, gap_max, text_gap):
+                    visited.add(other.obj_id)
+                    stack.append(other)
+        regions.append(region)
+    return regions
 
 
 def _filter_noise(objects: list[AtomicObject],
@@ -829,17 +900,10 @@ def extract_blocks(pptx_path: str, out_dir: str,
             continue
         # 用户准则①：raster/vector/visio 面积 > 整页 30% → 独立成块
         big_objs, objs = _split_big_objects(objs, cfg)
-        # 其余对象走空间聚类
-        clusters = _union_find_cluster(objs, cfg)
-        # 用户准则②：凸区域递归分割（凹区域按最少凸分割拆成多个块）
-        gap_px = cfg.get("split_gap_px", 40)
-        min_sub = cfg.get("page_w", 960) * cfg.get("page_h", 720) * \
-            cfg.get("min_sub_area_ratio", 0.20)
-        sub_clusters = []
-        for cl in clusters:
-            sub_clusters.extend(_split_cluster_convex(
-                cl, gap_px, cfg.get("page_w", 960), cfg.get("page_h", 720),
-                min_sub))
+        # 用户准则②：四向种子扩展区域生长（从种子对象出发四向扩展，
+        # 遇到字多文本对象（墙）或边界即停；加法生长天然不切碎表格/
+        # 框图，凹区域被墙/间隙阻断成多个区域，无需凸分割）
+        sub_clusters = _region_grow(objs, cfg)
         # 大面积对象各自成簇
         for o in big_objs:
             sub_clusters.append([o])
