@@ -56,6 +56,10 @@ CLUSTER_CONFIG = {
                                # 不参与聚类（逻辑图节点/标注通常字少）
     "max_block_text": 30,      # 聚类后块内文本总量 >30 字 → 判定混入了文本区，
                                # 剔除长文本成员并重组块
+    # 装饰/符号过滤判据（吸收 img_filter 教学判据思路）
+    "min_size": 48,            # 无文本 shape 宽或高 <48px → 装饰小图标
+    "max_ratio": 10,           # 无文本 shape 宽高比 >10 → 装饰细长线
+    "formula_min_area": 20000, # 小型公式面积 <20000px²（约141×141）→ 公式符号
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -214,17 +218,49 @@ def _union_find_cluster(objects: list[AtomicObject],
 
 def _filter_noise(objects: list[AtomicObject],
                   config: dict = None) -> list[AtomicObject]:
-    """过滤噪声：面积过小且无文本、无输出文件的装饰对象。"""
+    """过滤噪声（吸收 img_filter 教学判据思路）：
+
+    1) 面积过小且无文本、无输出文件的装饰对象 → 丢弃；
+    2) 小型公式（formula 面积 < formula_min_area）→ 丢弃
+       （单个公式符号/上下标，内容已由公式提取步骤保留）；
+    3) 无文本 shape：宽或高 < min_size（装饰小图标）或
+       宽高比 > max_ratio（装饰细长线）→ 丢弃；
+    有文本的 shape/connector（逻辑图节点标签，即使小）与
+    raster/vector/visio/chart/table（主内容）始终保留。
+    """
     cfg = {**CLUSTER_CONFIG, **(config or {})}
+    min_size = cfg.get("min_size", 48)
+    max_ratio = cfg.get("max_ratio", 10)
+    formula_min_area = cfg.get("formula_min_area", 20000)
     out = []
     for o in objects:
         b = o.bbox or {}
         w, h = b.get("w", 0), b.get("h", 0)
         area = w * h
-        # 有文本 / 有媒体文件 / 面积足够 → 保留
-        if o.text or o.output_file or area >= cfg["min_area"]:
+        text = (o.text or "").strip()
+        # 有文本 → 保留（逻辑图节点/箭头标注，即使小）
+        if text:
             out.append(o)
-        # 否则（小且无内容的纯装饰 shape）丢弃
+            continue
+        # 有媒体文件（raster/vector/visio/chart）→ 主内容，保留
+        if o.output_file:
+            out.append(o)
+            continue
+        # 表格 → 保留
+        if o.kind == "table":
+            out.append(o)
+            continue
+        # 小型公式（无文本且面积不足）→ 丢弃（符号/上下标）
+        if o.kind == "formula":
+            if area >= formula_min_area:
+                out.append(o)
+            continue
+        # 无文本 shape/connector：尺寸过小 / 细长装饰 → 丢弃
+        if area < cfg["min_area"] or \
+                min(w, h) < min_size or \
+                (min(w, h) > 0 and max(w, h) / min(w, h) > max_ratio):
+            continue
+        out.append(o)
     return out
 
 
