@@ -70,6 +70,11 @@ CLUSTER_CONFIG = {
     # 页眉/页脚横幅过滤（战略管理等课件常见的跨页重复装饰色带）
     "banner_ratio": 0.9,       # 宽度 ≥ 90% 页面宽
     "banner_max_h": 80,        # 且高度 ≤ 80px → 判为装饰横幅
+    # 符号碎片过滤（用户准则）：无文本、无媒体、无连接的纯形状块不构成
+    # 可视逻辑块。对象数 ≤3 无条件剔除；对象数 >3 但块面积 < 页面
+    # min_block_area_ratio（10%≈263×263px）也剔除。含文本标签/图/表/
+    # 连接的块不受此限制（逻辑图节点短标签、独立小图均保留）
+    "min_block_area_ratio": 0.10,
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -943,6 +948,23 @@ def extract_blocks(pptx_path: str, out_dir: str,
             max_y = max(o.bbox["y"] + o.bbox["h"] for o in cl)
             bbox = {"x": round(min_x, 1), "y": round(min_y, 1),
                     "w": round(max_x - min_x, 1), "h": round(max_y - min_y, 1)}
+            # 符号碎片过滤（用户准则）：可视逻辑块应是有表达目的的可视化
+            # 对象集合。无文本、无媒体（图/表/visio）、无连接（connector）
+            # 的纯形状块（如电路元件符号：2 个小形状拼成）不构成可视逻辑块：
+            #   对象数 ≤3 → 无条件碎片（单个/成对符号）；
+            #   对象数 >3 但块面积 < 页面 min_block_area_ratio → 碎片。
+            # 含文本标签 / 图 / 表 / 连接的块不受此限制（逻辑图节点短标签、
+            # 独立小图均保留）。
+            has_text = any((o.text or "").strip() for o in cl)
+            has_media = any(o.kind in ("raster", "vector", "visio",
+                                       "table", "chart") for o in cl)
+            has_conn = any(o.kind == "connector" for o in cl)
+            if not has_text and not has_media and not has_conn:
+                _page_area = cfg.get("page_w", 960) * cfg.get("page_h", 720)
+                if len(cl) <= 3 or \
+                        bbox["w"] * bbox["h"] < _page_area * \
+                        cfg.get("min_block_area_ratio", 0.10):
+                    continue  # 符号碎片：不输出
             zs = [o.z_index for o in cl]
             block = VisualBlock(
                 block_id=blk_id, page=page_no, bbox=bbox,
