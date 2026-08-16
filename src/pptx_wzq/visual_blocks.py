@@ -60,6 +60,9 @@ CLUSTER_CONFIG = {
     "min_size": 48,            # 无文本 shape 宽或高 <48px → 装饰小图标
     "max_ratio": 10,           # 无文本 shape 宽高比 >10 → 装饰细长线
     "formula_min_area": 20000, # 小型公式面积 <20000px²（约141×141）→ 公式符号
+    # 用户准则：大面积对象独立 + 凸区域分割
+    "big_area_ratio": 0.30,    # raster/vector/visio 面积 > 整页 30% → 独立成块
+    "split_gap_px": 40,        # 凸分割空白走廊阈值：贯穿块 bbox 的空隙 > 该值 → 切分
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -214,6 +217,86 @@ def _union_find_cluster(objects: list[AtomicObject],
     for i in range(n):
         groups.setdefault(find(i), []).append(objects[i])
     return list(groups.values())
+
+
+def _split_cluster_convex(cluster: list, gap_px: int = 40,
+                          page_w: int = 960, page_h: int = 720) -> list:
+    """凸区域递归分割（用户准则）：删除多字文本框后，剩余连续区域若是凸的
+    则为一个可视逻辑块；若是凹的，按最少凸分割拆成若干块。
+
+    近似实现：检测"贯穿块 bbox 的水平/垂直空白走廊"——若存在一条空隙带
+    （高度/宽度 > gap_px）把成员分成上下/左右两群（两侧都有成员），
+    则在此切分；递归直到每个子簇内部无贯穿空白（凸）。
+
+    保护规则：
+    - 单成员簇不切；
+    - 有 connector 连接的簇不切（显式关联的逻辑图，空白可能是布线空隙）；
+    - 切割线两侧任一侧成员数 < 1 或切出的子簇面积过小（< 1/4 块）不切。
+    """
+    if len(cluster) < 2:
+        return [cluster]
+    # 有 connector 关联的簇视为显式逻辑图，不切
+    if any(o.kind == "connector" for o in cluster):
+        return [cluster]
+
+    min_x = min(o.bbox["x"] for o in cluster)
+    min_y = min(o.bbox["y"] for o in cluster)
+    max_x = max(o.bbox["x"] + o.bbox["w"] for o in cluster)
+    max_y = max(o.bbox["y"] + o.bbox["h"] for o in cluster)
+    bw, bh = max_x - min_x, max_y - min_y
+
+    # --- 水平切割：找贯穿的垂直空白带（在 bbox 内，x 空隙把成员分左右）---
+    for cut in _find_gaps(
+            [(o.bbox["x"], o.bbox["x"] + o.bbox["w"]) for o in cluster],
+            bw, gap_px):
+        left = [o for o in cluster if o.bbox["x"] + o.bbox["w"] <= cut]
+        right = [o for o in cluster if o.bbox["x"] >= cut]
+        if left and right:
+            return (_split_cluster_convex(left, gap_px, page_w, page_h) +
+                    _split_cluster_convex(right, gap_px, page_w, page_h))
+    # --- 垂直切割：找贯穿的水平空白带（在 bbox 内，y 空隙把成员分上下）---
+    for cut in _find_gaps(
+            [(o.bbox["y"], o.bbox["y"] + o.bbox["h"]) for o in cluster],
+            bh, gap_px):
+        top = [o for o in cluster if o.bbox["y"] + o.bbox["h"] <= cut]
+        bottom = [o for o in cluster if o.bbox["y"] >= cut]
+        if top and bottom:
+            return (_split_cluster_convex(top, gap_px, page_w, page_h) +
+                    _split_cluster_convex(bottom, gap_px, page_w, page_h))
+    return [cluster]
+
+
+def _find_gaps(intervals: list, total: float, gap_px: float) -> list:
+    """在 [0,total] 区间内找"贯穿空隙"的切割位置。
+    intervals: [(start, end)] 成员的投影区间；返回可切割的坐标列表
+    （空隙中点），要求空隙宽度 > gap_px 且两端都有成员覆盖。"""
+    if not intervals:
+        return []
+    # 把成员区间按 start 排序，检查相邻成员之间的空隙是否"贯穿"（无人覆盖）
+    ivs = sorted((max(0.0, a), min(total, b)) for a, b in intervals)
+    cuts = []
+    prev_end = None
+    for a, b in ivs:
+        if prev_end is not None and a - prev_end > gap_px:
+            cuts.append((prev_end + a) / 2)
+        prev_end = max(prev_end or 0, b)
+    return cuts
+
+
+def _split_big_objects(objs: list, cfg: dict) -> tuple:
+    """用户准则：raster/vector/visio 面积 > 整页 30% → 独立成块（不合并）。
+    返回 (big_objs 列表, 其余对象列表)。"""
+    pw, ph = cfg.get("page_w", 960), cfg.get("page_h", 720)
+    ratio = cfg.get("big_area_ratio", 0.30)
+    page_area = pw * ph * ratio
+    big, rest = [], []
+    for o in objs:
+        a = (o.bbox or {}).get("w", 0) * (o.bbox or {}).get("h", 0)
+        if o.kind in ("raster", "vector", "visio") and a >= page_area:
+            big.append(o)
+        else:
+            rest.append(o)
+    return big, rest
 
 
 def _filter_noise(objects: list[AtomicObject],
@@ -679,15 +762,27 @@ def extract_blocks(pptx_path: str, out_dir: str,
         if not objs:
             slides_out.append({"page": page_no, "blocks": [], "relations": []})
             continue
+        # 用户准则①：raster/vector/visio 面积 > 整页 30% → 独立成块
+        big_objs, objs = _split_big_objects(objs, cfg)
+        # 其余对象走空间聚类
         clusters = _union_find_cluster(objs, cfg)
+        # 用户准则②：凸区域递归分割（凹区域按最少凸分割拆成多个块）
+        gap_px = cfg.get("split_gap_px", 40)
+        sub_clusters = []
+        for cl in clusters:
+            sub_clusters.extend(_split_cluster_convex(
+                cl, gap_px, cfg.get("page_w", 960), cfg.get("page_h", 720)))
+        # 大面积对象各自成簇
+        for o in big_objs:
+            sub_clusters.append([o])
         # 限制每页块数：按面积降序取前 max_blocks_per_slide
-        clusters.sort(key=lambda c: -sum(
+        sub_clusters.sort(key=lambda c: -sum(
             (o.bbox.get("w", 0) * o.bbox.get("h", 0)) for o in c))
-        if len(clusters) > cfg["max_blocks_per_slide"]:
-            clusters = clusters[:cfg["max_blocks_per_slide"]]
+        if len(sub_clusters) > cfg["max_blocks_per_slide"]:
+            sub_clusters = sub_clusters[:cfg["max_blocks_per_slide"]]
 
         blocks = []
-        for ci, cl in enumerate(clusters, start=1):
+        for ci, cl in enumerate(sub_clusters, start=1):
             blk_id = f"blk_{ci:02d}"
             # 块级文本密度校验：块内文本总量 > max_block_text 字 →
             # 判定混入了正文文本区，剔除长文本成员后重组块（剩余成员
