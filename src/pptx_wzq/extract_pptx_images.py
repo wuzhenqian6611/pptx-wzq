@@ -747,8 +747,12 @@ def _detect_rasterizer(prefer: str):
             else:
                 cand_dirs = [Path("/usr/bin"), Path("/opt/libreoffice/program"),
                              Path("/snap/bin")]
+            # Windows 优先 soffice.exe（启动器会设置环境；soffice.bin 直调
+            # 可能静默失败不产出文件），其余平台用 soffice
+            exe_names = ("soffice.exe", "soffice", "soffice.bin") \
+                if sys.platform.startswith("win") else ("soffice", "soffice.bin")
             for d in cand_dirs:
-                for exe in ("soffice", "soffice.bin"):
+                for exe in exe_names:
                     p = d / exe
                     if p.is_file():
                         found.append(("soffice", str(p)))
@@ -762,7 +766,7 @@ def _detect_rasterizer(prefer: str):
     p = shutil.which("pdftoppm")
     if p:
         found.append(("pdftoppm", p))
-    return found[0] if found else None
+    return found if found else None
 
 
 def rasterize_vector(in_path: Path, out_png: Path, dpi: int = 150, prefer: str = "auto"):
@@ -796,9 +800,22 @@ def rasterize_vector(in_path: Path, out_png: Path, dpi: int = 150, prefer: str =
         return False, f"栅格化失败({e})，保留矢量原文件"
 
 
+def _count_pptx_slides(pptx_path: str) -> int:
+    """统计 pptx 页数（zip 内 slideN.xml 数量）。"""
+    try:
+        import zipfile as _zf
+        with _zf.ZipFile(pptx_path) as z:
+            return sum(1 for n in z.namelist()
+                       if re.match(r"ppt/slides/slide\d+\.xml$", n))
+    except Exception:
+        return 0
+
+
 def render_pptx_pages(pptx_path: str, cache_dir: Path, dpi: int = 150):
     """用 LibreOffice 把整份 pptx 渲染为逐页 PNG（index 0=第1页）。
-    依赖 soffice + pdftoppm，缺失则返回 None（优雅降级）。"""
+    依赖 soffice + pdftoppm，缺失则返回 None（优雅降级）。
+    缓存复用：cache_dir 已有完整页数（与 pptx 页数一致）时直接返回，
+    避免每次重跑 soffice/pdftoppm（大课件渲染可达数分钟）。"""
     soffice = None
     for t in _detect_rasterizer("soffice"):
         if t[0] == "soffice":
@@ -811,17 +828,29 @@ def render_pptx_pages(pptx_path: str, cache_dir: Path, dpi: int = 150):
             break
     if not soffice or not pdftoppm:
         return None
+    n_slides = _count_pptx_slides(pptx_path)
+    existing = sorted(cache_dir.glob("page-*.png")) \
+        if cache_dir.is_dir() else []
+    if n_slides and len(existing) >= n_slides:
+        return existing
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = cache_dir / "deck.pdf"
+        # 清掉不完整的旧 png，避免混用
+        for old in cache_dir.glob("page-*.png"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
         subprocess.run([soffice, "--headless", "--convert-to", "pdf",
                         "--outdir", str(cache_dir), str(pptx_path)],
-                       check=True, capture_output=True, timeout=300)
-        if not pdf_path.exists():
+                       check=True, capture_output=True, timeout=600)
+        pdfs = sorted(cache_dir.glob("*.pdf"))
+        if not pdfs:
             return None
+        pdf_path = pdfs[0]
         subprocess.run([pdftoppm, "-r", str(dpi), "-png",
                         str(pdf_path), str(cache_dir / "page")],
-                       check=True, capture_output=True, timeout=180)
+                       check=True, capture_output=True, timeout=600)
         pages = sorted(cache_dir.glob("page-*.png"))
         return pages or None
     except Exception:  # pragma: no cover

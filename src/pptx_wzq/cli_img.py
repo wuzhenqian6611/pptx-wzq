@@ -196,7 +196,9 @@ def _normalize_vectors(records, by_page: Path, args) -> dict:
     want = getattr(args, "vector_out", "svg")
     tool = None
     try:
-        tool = E._detect_rasterizer(getattr(args, "raster_prefer", "auto"))
+        tools = E._detect_rasterizer(getattr(args, "raster_prefer", "auto"))
+        tool = next((t for t in (tools or []) if t[0] in ("soffice", "inkscape")),
+                    None)
     except Exception:
         tool = None
     if tool is None:
@@ -340,7 +342,8 @@ def _check_env(args) -> None:
     """启动环境检查（stderr，不阻断）。Pillow/YOLO 由 img_filter.print_env 统一报告。"""
     img_filter.print_env("[环境]")
     if args.rasterize_vector:
-        tool = E._detect_rasterizer(args.raster_prefer)
+        tools = E._detect_rasterizer(args.raster_prefer) or []
+        tool = next((t for t in tools if t[0] in ("soffice", "inkscape")), None)
         if tool is None:
             print("[环境] 矢量栅格化: 未检测到 LibreOffice/Inkscape"
                   "（矢量图将保留原文件）", file=sys.stderr)

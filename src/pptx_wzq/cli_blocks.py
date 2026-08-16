@@ -121,7 +121,11 @@ def _assemble_slides(slides: list, page_texts: dict,
         for blk in blocks:
             img_name = f"slide_{page:02d}_{blk['block_id']}.png"
             blk.setdefault("assets", {})
-            blk["assets"]["rendered_image"] = f"./images/{img_name}"
+            b = blk.get("bbox") or {}
+            if b.get("w") and b.get("h"):
+                blk["assets"]["rendered_image"] = f"./images/{img_name}"
+            else:
+                blk["assets"]["rendered_image"] = None
             vec = blk.get("vector_svg")
             if vec:
                 blk["assets"]["vector_svg"] = f"./sources/{vec}"
@@ -257,16 +261,22 @@ def _main(argv=None) -> int:
     image_dir.mkdir(parents=True, exist_ok=True)
     n_rendered = 0
     if args.pptx and args.pptx.is_file():
-        for s in slides:
-            for blk in s["blocks"]:
-                img_path = image_dir / f"slide_{s['page']:02d}_{blk['block_id']}.png"
-                if img_path.is_file():
-                    n_rendered += 1
-                    continue
-                ok = VB.render_block_to_png(s["page"], blk,
-                                            str(args.pptx), img_path)
-                if ok:
-                    n_rendered += 1
+        # 单次整页渲染（缓存到课件旁 .render_cache），再按块 bbox 裁剪，
+        # 避免每个块重复跑 LibreOffice（237 块 × 整页渲染会极慢）
+        from pptx_wzq import extract_pptx_images as E
+        cache = Path(args.pptx).parent / ".render_cache"
+        pages = E.render_pptx_pages(str(args.pptx), cache, dpi=150)
+        if pages:
+            for s in slides:
+                for blk in s["blocks"]:
+                    img_path = image_dir / \
+                        f"slide_{s['page']:02d}_{blk['block_id']}.png"
+                    if img_path.is_file():
+                        n_rendered += 1
+                        continue
+                    ok = _crop_block_png(pages, s["page"], blk, img_path, 150)
+                    if ok:
+                        n_rendered += 1
 
     # 组装最终 JSON
     out_slides = _assemble_slides(slides, page_texts, page_formulas,
@@ -316,6 +326,25 @@ def _block_type_counter(slides: list) -> dict:
         for blk in s["visual_blocks"]:
             c[blk.get("block_type", "unknown")] += 1
     return dict(c)
+
+
+def _crop_block_png(pages: list, page_no: int, blk: dict,
+                    out_png: Path, dpi: int = 150) -> bool:
+    """从整页渲染结果中按块 bbox 裁剪出 PNG（px→EMU）。
+    块 bbox 无效（宽或高为 0）时返回 False（无坐标无法裁剪）。"""
+    try:
+        from pptx_wzq import extract_pptx_images as E
+        if (page_no - 1) >= len(pages):
+            return False
+        b = blk.get("bbox") or {"x": 0, "y": 0, "w": 0, "h": 0}
+        if b["w"] <= 0 or b["h"] <= 0:
+            return False
+        xfrm = (int(b["x"] / 96 * 914400), int(b["y"] / 96 * 914400),
+                int(b["w"] / 96 * 914400), int(b["h"] / 96 * 914400))
+        ok, _, _ = E.crop_page_png(pages[page_no - 1], xfrm, dpi, out_png)
+        return bool(ok)
+    except Exception:
+        return False
 
 
 def main() -> int:  # console

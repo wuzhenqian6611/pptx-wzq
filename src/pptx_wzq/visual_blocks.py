@@ -614,6 +614,11 @@ def extract_blocks(pptx_path: str, out_dir: str,
     slides_out = []
     for page_no in sorted(by_page_objs):
         objs = _filter_noise(by_page_objs[page_no], cfg)
+        # 剔除无几何对象（bbox 宽或高 ≤0，如内联 OMML 公式无独立区域）：
+        # 它们无法参与空间聚类、无法渲染成块图；内容由公式提取步骤保留
+        objs = [o for o in objs
+                if (o.bbox or {}).get("w", 0) > 0 and
+                (o.bbox or {}).get("h", 0) > 0]
         if not objs:
             slides_out.append({"page": page_no, "blocks": [], "relations": []})
             continue
