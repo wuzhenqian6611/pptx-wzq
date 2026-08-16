@@ -63,6 +63,9 @@ CLUSTER_CONFIG = {
     # 用户准则：大面积对象独立 + 凸区域分割
     "big_area_ratio": 0.30,    # raster/vector/visio 面积 > 整页 30% → 独立成块
     "split_gap_px": 40,        # 凸分割空白走廊阈值：贯穿块 bbox 的空隙 > 该值 → 切分
+    # 页眉/页脚横幅过滤（战略管理等课件常见的跨页重复装饰色带）
+    "banner_ratio": 0.9,       # 宽度 ≥ 90% 页面宽
+    "banner_max_h": 80,        # 且高度 ≤ 80px → 判为装饰横幅
 }
 
 # 单对象块直接映射（不调 VLM）
@@ -308,13 +311,18 @@ def _filter_noise(objects: list[AtomicObject],
        （单个公式符号/上下标，内容已由公式提取步骤保留）；
     3) 无文本 shape：宽或高 < min_size（装饰小图标）或
        宽高比 > max_ratio（装饰细长线）→ 丢弃；
+    4) 整页宽横幅（raster/vector 宽度 > 页面宽 banner_ratio，且
+       高度 < banner_max_h，如页眉/页脚装饰色带）→ 丢弃；
     有文本的 shape/connector（逻辑图节点标签，即使小）与
-    raster/vector/visio/chart/table（主内容）始终保留。
+    chart/table（主内容）始终保留。
     """
     cfg = {**CLUSTER_CONFIG, **(config or {})}
     min_size = cfg.get("min_size", 48)
     max_ratio = cfg.get("max_ratio", 10)
     formula_min_area = cfg.get("formula_min_area", 20000)
+    pw = cfg.get("page_w", 960)
+    banner_ratio = cfg.get("banner_ratio", 0.9)
+    banner_max_h = cfg.get("banner_max_h", 80)
     out = []
     for o in objects:
         b = o.bbox or {}
@@ -324,6 +332,10 @@ def _filter_noise(objects: list[AtomicObject],
         # 有文本 → 保留（逻辑图节点/箭头标注，即使小）
         if text:
             out.append(o)
+            continue
+        # 整页宽横幅：宽度 ≥ 90% 页面宽 且 高度 ≤ 80px（页眉/页脚色带）
+        if o.kind in ("raster", "vector") and w >= pw * banner_ratio \
+                and 0 < h <= banner_max_h:
             continue
         # 有媒体文件（raster/vector/visio/chart）→ 主内容，保留
         if o.output_file:

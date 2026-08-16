@@ -259,6 +259,12 @@ def _main(argv=None) -> int:
             if str(texts_path).endswith("_texts.md") else Path(texts_path).stem
     image_dir = out_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
+    # 清空旧块渲染图（块编号随规则变化，避免旧图残留造成 引用数≠文件数）
+    for old in image_dir.glob("slide_*_blk_*.png"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
     n_rendered = 0
     if args.pptx and args.pptx.is_file():
         # 单次整页渲染（缓存到课件旁 .render_cache），再按块 bbox 裁剪，
