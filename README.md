@@ -9,13 +9,13 @@
 
 ```
 PPT(.pptx)
-  → 图片提取/过滤（vsdx 直接存 .vsdx，矢量规范化 svg/wmf）  pptx-img
-  → 公式提取        pptx-formula
   → 文本提取（文本ID+坐标）  pptx-text
-  → 图片AI解读      pptx-caption
-  → 图文相关性过滤（剔除 logo/作者/单位等无关图）  pptx-related
+  → 公式提取        pptx-formula
+  → 图片提取/过滤 + 原子对象（shape/connector/table）  pptx-img
+  → 可视逻辑块解析 + Semantic Captioning（合并图片AI解读）  pptx-blocks
+  → 可视逻辑块相关性过滤（剔除 logo/作者/单位等无关块）  pptx-related
   → 教材文案（原文超 300 字直出不扩写）  pptx-author
-  → 图文绑定（图片ID/文本ID/坐标/逻辑关系）  pptx-bind
+  → 可视逻辑块 JSON 组装（pptx_multimodal_slide_v2.0 全栈解析）  pptx-blocks
   → 一条命令编排（日志 + 断点续传）  pptx-paser
   → 教材 HTML/Deck  pptx-html / pptx-deck
 ```
@@ -65,14 +65,15 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 
 | 命令 | 功能 | 模型 | Token |
 |---|---|---|---|
-| `pptx-img` | 图片提取 + 三路过滤 + WMF 识别/渲染 + 公式图片补提；Visio OLE 按容器存 `.vsdx`/`.vsd`；emf/wmf/svg 规范化 svg（失败回退 wmf）；记录幻灯片坐标 | — | 0 |
-| `pptx-formula` | 公式三路径提取（OMML / EQ3-MTEF / OCR）→ LaTeX | — | 0 |
 | `pptx-text` | 逐页文本/表格提取（排除页眉页脚），每条文本带 text_id 与幻灯片坐标 x/y/w/h | — | 0 |
-| `pptx-caption` | 图片 AI 解读（文档上下文模式，教材角度）；`--resume` 断点续跑 | qwen3.7-plus | 有 |
-| `pptx-related` | 图文相关性过滤：DeepSeek 判定图片与正文是否相关，无关图（logo/作者/单位/项目类别/重复装饰等）连同解读一并删除，写审计 json | deepseek-v4-flash | 有 |
+| `pptx-formula` | 公式三路径提取（OMML / EQ3-MTEF / OCR）→ LaTeX | — | 0 |
+| `pptx-img` | 图片提取 + 三路过滤 + WMF 识别/渲染 + 公式图片补提；Visio OLE 按容器存 `.vsdx`/`.vsd`；emf/wmf/svg 规范化 svg（失败回退 wmf）；记录幻灯片坐标；**收集原子对象（shape/connector/table → atomic_objects.json）** | — | 0 |
+| `pptx-blocks` | **可视逻辑块全栈解析**：空间聚类（并查集）把每页拆成 1~6 块 → 块渲染 PNG → VLM 判定块类型 + Semantic Captioning（表达目标/作用/特征/图文描述/教学用途）→ 图/树拓扑 → 跨模态关系 → `visual_blocks.json`（pptx_multimodal_slide_v2.0 schema）+ 块级 captions.md；`--no-vlm` 纯规则模式 | qwen3.7-plus | 有 |
+| `pptx-caption` | （旧）图片 AI 解读——已并入 `pptx-blocks`，保留兼容 | qwen3.7-plus | 有 |
+| `pptx-related` | 可视逻辑块相关性过滤：DeepSeek 判定块与正文是否相关，无关块（logo/作者/单位/项目类别/重复装饰等）连同解读一并删除，写审计 json | deepseek-v4-flash | 有 |
 | `pptx-author` | 教材文案（学科推断 + 整文生成 + 自适应分批）；某页原文超 300 字直接提取不扩写（`--no-expand-threshold`） | deepseek-v4-flash | 有 |
-| `pptx-bind` | 图文绑定 JSON：含 图片ID/文本ID/幻灯片坐标/DeepSeek 生成的 ≤60 字图文逻辑关系；`--resume` 按页续跑 | deepseek-v4-flash | 有 |
-| `pptx-paser` | 整体编排：环境自检 / Key 引导 / Token 预估 / **日志+断点续传**（state.json / pipeline.log）/ `--dry-run` / `--reset` | — | — |
+| `pptx-bind` | （旧）图文绑定 JSON——保留兼容，新流程由 `pptx-blocks` 的 `visual_blocks.json` 替代 | deepseek-v4-flash | 有 |
+| `pptx-paser` | 整体编排（**text → formula → img → blocks → related → author → blocks_json**）：环境自检 / Key 引导 / Token 预估 / **日志+断点续传**（state.json / pipeline.log）/ `--dry-run` / `--reset` | — | — |
 | `pptx-html` | 单文件教材 HTML（MathJax 公式 + PPT 原生标题） | — | 0 |
 | `pptx-deck` | 教育蓝图风格教学 Deck（示例脚本） | — | 0 |
 
@@ -80,8 +81,8 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 
 | 用途 | 平台 | 模型 |
 |---|---|---|
-| 图片 AI 解读 / 公式图片识别 | 阿里云百炼（bailian.console.aliyun.com） | qwen3.7-plus |
-| 教材文案 / 学科判断 | DeepSeek（platform.deepseek.com） | deepseek-v4-flash |
+| 可视逻辑块 Semantic Captioning / 公式图片识别 | 阿里云百炼（bailian.console.aliyun.com） | qwen3.7-plus |
+| 教材文案 / 学科判断 / 相关性判定 / 跨模态关系 | DeepSeek（platform.deepseek.com） | deepseek-v4-flash |
 
 缺失时 `pptx-paser` 会打印注册引导并交互写入环境变量（`DEEPSEEK_API_KEY` /
 `DASHSCOPE_API_KEY`）。
@@ -90,15 +91,17 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 
 ```
 结果目录/
-├─ images/              教学图片集（PNG + SVG/WMF 矢量 + vsdx/vsd 归档）
+├─ images/              可视逻辑块渲染图 + 原子图片集（slide_NN_blk_NN.png）
 ├─ sources/             矢量源文件归档（vsdx/svg/wmf/emf，可编辑资产）
 ├─ <名>_texts.md        文本清单（ID | 类型 | 文本 | 坐标；表格行类型）
-├─ <名>_captions.md     图片理解（# images 图片 AI 解读，已剔除无关图）
+├─ <名>_captions.md     可视逻辑块级 AI 解读（# images 图片 AI 解读，块为条目单位）
 ├─ <名>_textbook.md     教材文案（直出标注在节标题后；原文超 300 字直出）
-├─ <名>_binding.json    图文绑定 v3.1（page 含 title；图片条目含 image_id/
-│                       text_id/paragraph/坐标/position(LLM角色)/relation）
-├─ images_meta.json     图片元数据（图片→页/尺寸/来源，bind 数据源）
-├─ <名>_related_filter.json  图文相关性过滤审计（被删图 + 原因）
+├─ <名>_visual_blocks.json  可视逻辑块全栈解析（pptx_multimodal_slide_v2.0：
+│                       slide_info/textual_content/visual_blocks（几何/拓扑/
+│                       资源/类型/semantic_description）/cross_modal_relations/
+│                       summary；替换原 binding.json）
+├─ images_meta.json     图片元数据（图片→页/尺寸/来源）
+├─ <名>_related_filter.json  可视逻辑块相关性过滤审计（被删块 + 原因）
 ├─ state.json           断点续传状态机（含 doc_md5/tool_version，换源提示）
 ├─ pipeline.log         运行日志（每步开始/完成/失败时间戳）
 └─ 过程文件/            中间产物（by_page / manifest / texts / formulas / …）

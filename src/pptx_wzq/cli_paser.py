@@ -1,39 +1,40 @@
 """cli_paser.py — PPT-Paser 整体编排指令。
 
-把一份 PPT 依次跑完：图片提取 → 公式提取 → 文本提取 → 图片 AI 解读 →
-教材文案生成 → 图文关系绑定（JSON），并整理产物。
+把一份 PPT 依次跑完：文本提取 → 公式提取 → 图片提取（含原子对象）→
+可视逻辑块解析（合并图片 AI 解读）→ 相关性过滤 → 教材文案生成 →
+可视逻辑块 JSON 组装，并整理产物。
 
 用法：
     PPT-Paser XXX.pptx -o 生成结果目录
-    PPT-Paser XXX.pptx -o 结果目录 [--author-pages "1,4"] [--skip caption]
-      --skip 可逗号分隔跳过步骤：img,formula,text,caption,author,bind
-      --author-pages 透传给教材文案指令（只生成指定页，测试用）
+    PPT-Paser XXX.pptx -o 结果目录 [--author-pages "1,4"] [--skip blocks]
+      --skip 可逗号分隔跳过步骤：text,formula,img,blocks,related,author,blocks_json
 
 流程（含交互确认）：
     1) 环境检查：逐项组件检查并显示结果；
     2) KEY 检查：两个 API Key 缺失时打印注册引导（网页/用途/资费），
        交互输入 Key 并用 setx 注册，提示重启后重跑；
-    3) 执行计划：分步说明每步做什么 + 图片解读/教材文案两步的 Token
-       消耗估算 → 询问用户是否继续（输入 y 才执行）；
-    4) 依次执行六步（图片 AI 解读采用文档上下文模式：学科由文本前
-       3-5 页让模型生成，每图附带该页文本/公式上下文）；
-    5) 产物归位 + 执行结果汇总（每步工作量统计）+ 结果文档使用说明。
+    3) 执行计划：分步说明每步做什么 + Token 消耗估算 → 询问用户是否继续；
+    4) 依次执行七步（text/formula 提前为 blocks 的 Semantic Captioning
+       提供上下文；blocks 合并原 caption 职责）；
+    5) 产物归位 + 执行结果汇总 + 结果文档使用说明。
 
 产物组织：
     生成结果目录/
-      ├─ images/                    ← 图片文件（教学图片集）
-      ├─ <名>_captions.md           ← 图片理解文档（教材角度，有效结果）
+      ├─ images/                    ← 可视逻辑块渲染图 + 原子图（统一图片集）
+      ├─ sources/                   ← 矢量源（vsdx/svg/wmf/emf）
+      ├─ <名>_captions.md           ← 可视逻辑块级 AI 解读（Semantic Captioning）
       ├─ <名>_textbook.md           ← 教材文案
-      ├─ <名>_binding.json          ← 图文绑定关系（每页文案+该页图片）
+      ├─ <名>_visual_blocks.json    ← 可视逻辑块全栈解析（替换原 binding.json）
+      ├─ images_meta.json           ← 图片元数据
       过程文件/                     ← 其余全部（by_page/manifest/
-                                      texts.md/formulas.md/…）
+                                      texts.md/formulas.md/atomic_objects/…）
 
 执行前环境检查：
     1) 各子指令依赖：openai / Pillow / ultralytics+yolov5su.pt /
        olefile / ElementTree / LibreOffice(可选)；
     2) 两个模型的 API Key 环境变量：
-       DEEPSEEK_API_KEY（DeepSeek：学科判断+教材文案）
-       DASHSCOPE_API_KEY（阿里云百炼：图片 AI 解读）
+       DEEPSEEK_API_KEY（DeepSeek：学科判断+教材文案+关系判定）
+       DASHSCOPE_API_KEY（阿里云百炼：可视逻辑块 Semantic Captioning）
 
 退出码：0 成功（含用户取消）/ 1 处理异常 / 2 参数或环境错误。
 
@@ -52,11 +53,12 @@ from pathlib import Path
 
 from pptx_wzq.cli_common import banner, banner_end
 
-VERSION = "PPT-Paser 3.0.0 (整体编排+断点续传+日志+相关性过滤)"
+VERSION = "PPT-Paser 4.0.0 (可视逻辑块全栈解析 + Semantic Captioning 合并)"
 PROC_DIR = "过程文件"
 
-# 步骤顺序（含需求5 新增的 related：caption 之后、author 之前）
-STEPS = ["img", "formula", "text", "caption", "related", "author", "bind"]
+# 步骤顺序（新流程：text/formula 提前为 blocks 提供上下文；
+# blocks 合并原 caption；blocks_json 组装最终 JSON）
+STEPS = ["text", "formula", "img", "blocks", "related", "author", "blocks_json"]
 
 
 # --------------------------------------------------------------------------
@@ -128,10 +130,10 @@ def _artifact_ok(out: Path, stem: str, step: str) -> bool:
         cands = [proc / "formula", work / "formula"]
     elif step == "text":
         cands = [proc / "text", work / "text"]
-    elif step == "caption":
-        cands = [out / f"{stem}_captions.md",
-                 proc / "cap" / "captions.md",
-                 work / "cap" / "captions.md"]
+    elif step == "blocks":
+        cands = [out / f"{stem}_visual_blocks.json",
+                 proc / "blocks" / f"{stem}_visual_blocks.json",
+                 work / "blocks" / f"{stem}_visual_blocks.json"]
     elif step == "related":
         cands = [out / f"{stem}_related_filter.json",
                  proc / "cap" / f"{stem}_related_filter.json",
@@ -140,8 +142,8 @@ def _artifact_ok(out: Path, stem: str, step: str) -> bool:
         cands = [out / f"{stem}_textbook.md",
                  proc / f"{stem}_textbook.md",
                  work / f"{stem}_textbook.md"]
-    elif step == "bind":
-        cands = [out / f"{stem}_binding.json"]
+    elif step == "blocks_json":
+        cands = [out / f"{stem}_visual_blocks.json"]
     return any(c.is_dir() if c.suffix == "" else c.is_file() for c in cands)
 
 
@@ -170,11 +172,12 @@ def _build_plan(out: Path, stem: str, state: dict, skip: set) -> dict:
 
 def _reset_out(out: Path, stem: str) -> None:
     """--reset：清空本管线生成的全部旧产物与状态（保留目录本身）。"""
-    for p in (out / "images", out / PROC_DIR, out / "_proc",
+    for p in (out / "images", out / "sources", out / PROC_DIR, out / "_proc",
               out / "state.json", out / "pipeline.log",
               out / f"{stem}_captions.md", out / f"{stem}_textbook.md",
-              out / f"{stem}_binding.json",
-              out / f"{stem}_related_filter.json"):
+              out / f"{stem}_visual_blocks.json",
+              out / f"{stem}_related_filter.json",
+              out / "images_meta.json"):
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)
         elif p.is_file():
@@ -386,23 +389,20 @@ def _missing_author_pages(work: Path, stem: str) -> str | None:
 
 def _exec_step(step: str, args, work: Path, stem: str,
                action: str) -> None:
-    """执行单个步骤（img/formula/text/caption/related/author/bind）。
+    """执行单个步骤（text/formula/img/blocks/related/author/blocks_json）。
     action: run | resume（resume 透传给子命令的续跑参数）。"""
     pptx = Path(args.pptx)
     total = len(STEPS)
     idx = STEPS.index(step) + 1
-    if step == "img":
+    if step == "text":
         _run_step(
-            "图片提取+过滤+图片集（vsdx 直接存 .vsdx，矢量规范化 svg/wmf）",
-            "cli_img",
-            [pptx, "-o", work / "img"], ".",
-            desc="解析 PPT 全部图片类对象（<p:pic> 图片 / 形状填充 / 页面背景 / "
-                 "OLE 公式 / 图表 / Visio 嵌入对象）→ 三路过滤 → Visio OLE 按"
-                 "容器存 .vsdx/.vsd、emf/wmf/svg 规范化 svg（失败回退 wmf）→ "
-                 "位图封装 WMF 渲染+OCR → 教学图片集",
-            resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
-                     "PowerPoint / LibreOffice(可选)",
-            outs=[work / "img" / "images"], idx=idx, total=total)
+            "文本提取（文本 ID + 坐标）", "cli_text",
+            [pptx, "-o", work / "text"], ".",
+            desc="逐页提取文本框 / 表格 / 标题占位符文本（排除页眉页脚），"
+                 "每条分配 text_id（TXT###-##）并记录幻灯片坐标 x/y/w/h → "
+                 "<名>_texts.md + <名>_text_entries.json",
+            resource="本地计算（0 Token）· 仅依赖 Python 标准库 XML 解析",
+            outs=[work / "text"], idx=idx, total=total)
     elif step == "formula":
         _run_step(
             "公式提取", "cli_formula",
@@ -414,46 +414,54 @@ def _exec_step(step: str, args, work: Path, stem: str,
             resource="本地计算（0 Token）· 依赖 omml2latex / olefile / "
                      "mtef_decoder；OCR 可选",
             outs=[work / "formula"], idx=idx, total=total)
-    elif step == "text":
+    elif step == "img":
         _run_step(
-            "文本提取（文本 ID + 坐标）", "cli_text",
-            [pptx, "-o", work / "text"], ".",
-            desc="逐页提取文本框 / 表格 / 标题占位符文本（排除页眉页脚），"
-                 "每条分配 text_id（TXT###-##）并记录幻灯片坐标 x/y/w/h → "
-                 "<名>_texts.md + <名>_text_entries.json",
-            resource="本地计算（0 Token）· 仅依赖 Python 标准库 XML 解析",
-            outs=[work / "text"], idx=idx, total=total)
-    elif step == "caption":
-        cap_args = [work / "img" / "images", "-o", work / "cap" / "captions.md",
-                    "--texts", work / "text" / f"{stem}_texts.md",
-                    "--formulas", work / "formula" / f"{stem}_formulas.md"]
+            "图片提取+过滤+图片集（vsdx 直接存 .vsdx，矢量规范化 svg/wmf）",
+            "cli_img",
+            [pptx, "-o", work / "img"], ".",
+            desc="解析 PPT 全部图片类对象（<p:pic> 图片 / 形状填充 / 页面背景 / "
+                 "OLE 公式 / 图表 / Visio 嵌入对象）+ 原生 shape/connector/表格"
+                 "（原子对象）→ 三路过滤 → Visio OLE 按容器存 .vsdx/.vsd、"
+                 "emf/wmf/svg 规范化 svg（失败回退 wmf）→ 位图封装 WMF 渲染+OCR "
+                 "→ 教学图片集 + atomic_objects.json",
+            resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
+                     "PowerPoint / LibreOffice(可选)",
+            outs=[work / "img" / "images"], idx=idx, total=total)
+    elif step == "blocks":
+        blk = [work / "blocks", "--pptx", pptx,
+               "--atomic-objects", work / "img" / "atomic_objects.json",
+               "--texts", work / "text" / f"{stem}_texts.md",
+               "--formulas", work / "formula" / f"{stem}_formulas.md",
+               "-o", work / "blocks" / f"{stem}_visual_blocks.json",
+               "--captions", work / "blocks" / "captions.md"]
         if action == "resume":
-            cap_args.append("--resume")
+            blk.append("--resume")
         _run_step(
-            "图片 AI 解读（文档上下文模式）", "cli_caption", cap_args, ".",
-            desc="先由前几页文本让模型判断课程/专业名，再对 images/ 每张图 "
-                 "附带「该页文本+公式」上下文喂入视觉大模型 qwen3.7-plus，"
-                 "从教材角度输出 100~200 字图片理解 → <名>_captions.md；"
-                 + ("断点续跑：跳过已完成图片" if action == "resume"
-                    else "增量落盘、失败重试"),
+            "可视逻辑块解析 + Semantic Captioning（合并原图片解读）",
+            "cli_blocks", blk, ".",
+            desc="读原子对象 + 页文本/公式上下文 → 空间聚类（并查集）把每页"
+                 "拆成 1~6 个可视逻辑块 → 块渲染 PNG → 视觉模型判定 block_type "
+                 "并生成 semantic_description（表达目标/作用/特征/图文描述/"
+                 "教学用途）→ 图/树拓扑 → 跨模态关系 → 块级 captions.md + "
+                 "visual_blocks.json",
             resource="消耗 Token（视觉模型 qwen3.7-plus，DASHSCOPE_API_KEY）",
-            outs=[work / "cap"], idx=idx, total=total)
+            outs=[work / "blocks"], idx=idx, total=total)
     elif step == "related":
         _run_step(
-            "图文相关性过滤（剔除 logo/作者/单位等无关图）", "cli_related",
-            [work / "cap", "-o", work / "cap" / "captions.md",
+            "可视逻辑块相关性过滤（剔除 logo/作者/单位等无关块）", "cli_related",
+            [work / "blocks", "-o", work / "blocks" / "captions.md",
              "--texts", work / "text" / f"{stem}_texts.md",
-             "--images-dir", work / "img" / "images"], ".",
-            desc="把每张图的 qwen 诠释与该页正文交给 DeepSeek 判断相关性，"
-                 "无关图（品牌 logo / 作者信息 / 单位名称 / 项目类别 / "
-                 "每页重复装饰 / 二维码等）从 images/、by_page/、captions.md "
-                 "中删除 → <名>_related_filter.json 审计",
+             "--images-dir", work / "blocks" / "images"], ".",
+            desc="把每个块的 caption 与该页正文交给 DeepSeek 判断相关性，"
+                 "无关块（品牌 logo / 作者信息 / 单位名称 / 项目类别 / "
+                 "每页重复装饰 / 二维码等）从 images/、captions.md 中删除 → "
+                 "<名>_related_filter.json 审计",
             resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
-            outs=[work / "cap"], idx=idx, total=total)
+            outs=[work / "blocks"], idx=idx, total=total)
     elif step == "author":
         au = ["--texts", work / "text" / f"{stem}_texts.md",
               "--formulas", work / "formula" / f"{stem}_formulas.md",
-              "--captions", work / "cap" / "captions.md",
+              "--captions", work / "blocks" / "captions.md",
               "-o", work / f"{stem}_textbook.md"]
         if action == "resume":
             miss = _missing_author_pages(work, stem)
@@ -464,33 +472,37 @@ def _exec_step(step: str, args, work: Path, stem: str,
                 au += ["--pages", "0"]   # 无缺失页：空跑保持已完成
         _run_step(
             "教材文案生成（原文超 300 字直出）", "cli_author", au, ".",
-            desc="学科自动推断 → 文本/公式/图片解读三份文档输入 DeepSeek "
+            desc="学科自动推断 → 文本/公式/可视逻辑块解读三份文档输入 DeepSeek "
                  "deepseek-v4-flash 逐页生成教材文案；某页原文去空白超过 "
                  "--no-expand-threshold（默认 300）字时直接提取原文、不调用"
                  "模型 → <名>_textbook.md；超长自动分批",
             resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
             outs=[work], idx=idx, total=total)
-    elif step == "bind":
-        bd = [work, "-o", work.parent / f"{stem}_binding.json",
-              "--textbook", work / f"{stem}_textbook.md",
-              "--images-dir", work / "img" / "images",
-              "--captions", work / "cap" / "captions.md"]
+    elif step == "blocks_json":
+        bd = [work / "blocks",
+              "--atomic-objects", work / "img" / "atomic_objects.json",
+              "--texts", work / "text" / f"{stem}_texts.md",
+              "--formulas", work / "formula" / f"{stem}_formulas.md",
+              "--pptx", pptx,
+              "-o", work.parent / f"{stem}_visual_blocks.json",
+              "--captions", work.parent / f"{stem}_captions.md"]
         if action == "resume":
             bd.append("--resume")
         _run_step(
-            "图文关系绑定（图片ID/文本ID/坐标/逻辑关系）", "cli_bind", bd, ".",
-            desc="按页组织 文本条目（text_id+坐标）与图片（image_id+幻灯片"
-                 "坐标 position），并调用 deepseek-v4-flash 依据 qwen 诠释+"
-                 "该页文本生成 ≤60 字图文逻辑关系（relation）→ binding.json，"
-                 "作为检索、知识图谱与个性化学习的索引基石",
-            resource="消耗 Token（逻辑关系：文本模型 deepseek-v4-flash，"
+            "可视逻辑块 JSON 组装（全栈解析 + 跨模态关系）",
+            "cli_blocks", bd, ".",
+            desc="按 pptx_multimodal_slide_v2.0 schema 组装 <名>_visual_blocks.json"
+                 "（slide_info / textual_content / visual_blocks[] / "
+                 "cross_modal_relations[] / summary），并把块渲染图写入 images/、"
+                 "captions.md 写入结果目录",
+            resource="消耗 Token（跨模态关系：文本模型 deepseek-v4-flash，"
                      "DEEPSEEK_API_KEY）",
-            outs=[work / "img" / "images"], idx=idx, total=total)
+            outs=[work / "blocks"], idx=idx, total=total)
 
 
 def _organize(out: Path, work: Path, stem: str) -> None:
     """产物归位：结果目录=images/ + sources/ + <名>_captions.md +
-    <名>_textbook.md + <名>_binding.json + images_meta.json；
+    <名>_textbook.md + <名>_visual_blocks.json + images_meta.json；
     其余全部移到 过程文件/（对齐 word-wzq 交付物体系 v2.3.0）。"""
     proc = out / PROC_DIR
     proc.mkdir(parents=True, exist_ok=True)
@@ -503,17 +515,31 @@ def _organize(out: Path, work: Path, stem: str) -> None:
             shutil.rmtree(dst, ignore_errors=True)
         shutil.move(str(images_src), str(dst))
         print(f"[归位] images/ → {out}", file=sys.stderr)
-    cap = work / "cap" / "captions.md"
+    cap = work / "blocks" / "captions.md"
     if cap.is_file():
         shutil.move(str(cap), str(out / f"{stem}_captions.md"))
-        print(f"[归位] 图片理解文档 → {out / (stem + '_captions.md')}",
+        print(f"[归位] 可视逻辑块解读文档 → {out / (stem + '_captions.md')}",
               file=sys.stderr)
+    # 可视逻辑块渲染图 → images/（合并到已归位的原子图集）
+    blk_images = work / "blocks" / "images"
+    if blk_images.is_dir():
+        dst = out / "images"
+        dst.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for f in sorted(blk_images.iterdir()):
+            if f.is_file() and not (dst / f.name).exists():
+                try:
+                    shutil.copy2(str(f), str(dst / f.name))
+                    n += 1
+                except OSError:
+                    pass
+        print(f"[归位] 可视逻辑块渲染图 {n} 张 → {dst}", file=sys.stderr)
     tb = work / f"{stem}_textbook.md"
     if tb.is_file():
         shutil.move(str(tb), str(out / f"{stem}_textbook.md"))
         print(f"[归位] 教材文案 → {out / (stem + '_textbook.md')}",
               file=sys.stderr)
-    # binding.json 由 bind 步骤直接写到 out，这里只校验
+    # visual_blocks.json 由 blocks_json 步骤直接写到 out，这里只校验
 
     # 对齐 word 交付物体系（§2/§3.6）：sources/ 顶层矢量源归档 + images_meta.json
     manifest_path = work / "img" / "manifest.json"
@@ -609,44 +635,47 @@ def _plan_and_confirm(est: dict, skip: set) -> bool:
     """执行前分步说明 + token 估算 + 交互确认。返回是否继续。"""
     n_s, n_img, n_f = est["slides"], est["media"], est["embeds"]
     steps = []
-    if "img" not in skip:
-        steps.append(("1. 图片提取+过滤+图片集",
-                      "解析 PPT 全部图片/背景/填充，按教学判据过滤，"
-                      "生成 images/ 目录。本地执行，不消耗 API。"))
+    if "text" not in skip:
+        steps.append(("1. 文本提取",
+                      "逐页提取文本框/表格文本（排除页眉页脚/母版固定文本）。"
+                      "本地执行，不消耗 API。"))
     if "formula" not in skip:
         steps.append(("2. 公式提取",
                       "解析公式 OLE/OMML 为 LaTeX。本地执行，不消耗 API。"))
-    if "text" not in skip:
-        steps.append(("3. 文本提取",
-                      "逐页提取文本框/表格文本（排除页眉页脚/母版固定文本）。"
-                      "本地执行，不消耗 API。"))
-    if "caption" not in skip:
+    if "img" not in skip:
+        steps.append(("3. 图片提取+原子对象",
+                      "解析 PPT 全部图片/背景/填充/形状/连接符/表格，"
+                      "生成 images/ 与 atomic_objects.json。本地执行，"
+                      "不消耗 API。"))
+    if "blocks" not in skip:
         est_cap = n_img * (1200 + 400 + 250)   # 图片+页上下文+输出 ≈ 每图 1850
-        steps.append(("4. 图片 AI 解读（消耗 Token）",
-                      f"约 {n_img} 张图逐张喂入视觉模型（qwen3.7-plus），"
-                      f"每图附带该页文本/公式上下文。"
+        steps.append(("4. 可视逻辑块解析 + Semantic Captioning（消耗 Token）",
+                      f"约 {n_img} 个原子对象经空间聚类拆成每页 1~6 个可视逻辑块，"
+                      f"逐块喂入视觉模型（qwen3.7-plus）判定类型并生成语义描述，"
+                      f"附带该页文本/公式上下文。"
                       f"**预计消耗约 {est_cap//1000} 万~{int(est_cap*1.3)//1000} 万 Token**，"
                       f"耗时约 {max(1, n_img*8//60)} 分钟。"))
     if "related" not in skip:
         est_rel = n_img * (300 + 200 + 100)
-        steps.append(("5. 图文相关性过滤（消耗 Token）",
-                      f"约 {n_img} 张图的诠释与该页正文交 DeepSeek "
+        steps.append(("5. 可视逻辑块相关性过滤（消耗 Token）",
+                      f"约 {n_img} 个块的描述与该页正文交 DeepSeek "
                       f"(deepseek-v4-flash) 判定相关性，剔除 logo/作者/单位等"
-                      f"无关图。"
+                      f"无关块。"
                       f"**预计消耗约 {max(1, est_rel//1000)} 万 Token**，"
                       f"耗时约 {max(1, n_img*3//60)} 分钟。"))
     if "author" not in skip:
         est_au = (n_s * 500 + n_f * 80 + n_s * 400)
         steps.append(("6. 教材文案生成（消耗 Token）",
-                      f"文本/公式/图片理解三份文档输入 DeepSeek "
+                      f"文本/公式/可视逻辑块解读三份文档输入 DeepSeek "
                       f"(deepseek-v4-flash) 生成 {n_s} 页教材文案；"
                       f"原文超 300 字的页直接提取不扩写。"
                       f"**预计消耗约 {est_au//1000} 万~{int(est_au*1.5)//1000} 万 Token**，"
                       f"耗时约 {max(1, n_s*12//60)} 分钟。"))
-    if "bind" not in skip:
-        steps.append(("7. 图文关系绑定（含逻辑关系，消耗 Token）",
-                      "按页绑定文本条目/图片（ID+坐标），并调用 DeepSeek "
-                      "生成每张图的 ≤60 字图文逻辑关系。"))
+    if "blocks_json" not in skip:
+        steps.append(("7. 可视逻辑块 JSON 组装（含跨模态关系，消耗 Token）",
+                      "按 pptx_multimodal_slide_v2.0 schema 组装 "
+                      "visual_blocks.json，并调用 DeepSeek 生成每块与该页"
+                      "文字的关系描述。"))
 
     print("\n========== 执行计划 ==========", file=sys.stderr)
     for name, desc in steps:
@@ -677,32 +706,33 @@ def _report(out: Path, stem: str) -> None:
     n_cap = sum(1 for ln in
                 (cap.read_text(encoding="utf-8").splitlines()
                  if cap.is_file() else []) if ln.startswith("### IMG"))
-    bj = out / f"{stem}_binding.json"
+    bj = out / f"{stem}_visual_blocks.json"
     import json as _json
     bj_sum = ""
     if bj.is_file():
         try:
             s = _json.loads(bj.read_text(encoding="utf-8"))["summary"]
-            bj_sum = f"{s['pages']} 页 / 图 {s['images_total']} / "
+            bj_sum = f"{s['slides']} 页 / 块 {s['blocks_total']} / "
         except Exception:
             pass
     print(f"  图片：{n_img} 张 → images/", file=sys.stderr)
-    print(f"  图片理解：{n_cap} 条 → {stem}_captions.md", file=sys.stderr)
+    print(f"  可视逻辑块解读：{n_cap} 条 → {stem}_captions.md", file=sys.stderr)
     print(f"  教材文案：{n_pages} 页 → {stem}_textbook.md", file=sys.stderr)
-    print(f"  图文绑定：{bj_sum}→ {stem}_binding.json", file=sys.stderr)
+    print(f"  可视逻辑块 JSON：{bj_sum}→ {stem}_visual_blocks.json", file=sys.stderr)
     print("\n========== 结果文档使用说明 ==========", file=sys.stderr)
     print(f"  1. {stem}_textbook.md —— 教材文案：每页一节，可直接作为"
           "教材/课件文字素材；", file=sys.stderr)
-    print(f"  2. {stem}_captions.md —— 图片理解：每张图的教材角度解读"
-          "（图片类型/内容理解/教学用途），配图说明直接引用；",
+    print(f"  2. {stem}_captions.md —— 可视逻辑块解读：每块的语义描述"
+          "（类型/表达目标/作用/图文理解/教学用途），配图说明直接引用；",
           file=sys.stderr)
-    print("  3. images/ —— 教学图片集：与 captions.md 的 IMG 编号对应；",
+    print("  3. images/ —— 可视逻辑块渲染图 + 原子图片集：与 captions.md "
+          "的 IMG 编号对应；", file=sys.stderr)
+    print(f"  4. {stem}_visual_blocks.json —— 可视逻辑块全栈解析：每页的块"
+          "（几何/拓扑/资源/类型/语义描述）与跨模态关系，供检索/知识库/"
+          "RAG 使用；", file=sys.stderr)
+    print("  5. 过程文件/ —— 中间产物（by_page/manifest/texts/formulas/"
+          "atomic_objects/过滤报告等），需要溯源或二次加工时使用。",
           file=sys.stderr)
-    print(f"  4. {stem}_binding.json —— 图文绑定：按页列出每页文案与其"
-          "图片的对应关系（含图片解读），供排版/检索/知识库使用；",
-          file=sys.stderr)
-    print("  5. 过程文件/ —— 中间产物（by_page/manifest/公式/文本/过滤"
-          "报告等），需要溯源或二次加工时使用。", file=sys.stderr)
     print("", file=sys.stderr)
 
 
@@ -714,8 +744,8 @@ def _main(argv=None) -> int:
     ap.add_argument("-o", "--output", default="output",
                     help="生成结果目录（结果文件+过程文件/ 放这里）")
     ap.add_argument("--skip", default=None,
-                    help="逗号分隔跳过步骤：img,formula,text,caption,"
-                         "related,author,bind")
+                    help="逗号分隔跳过步骤：text,formula,img,blocks,"
+                         "related,author,blocks_json")
     ap.add_argument("--author-pages", default=None,
                     help="透传给教材文案指令：只生成指定页，如 '1,4'"
                          "（默认全部，测试用）")
@@ -828,7 +858,7 @@ def _main(argv=None) -> int:
     print(f"  - {out / 'images'}", file=sys.stderr)
     print(f"  - {out / (stem + '_captions.md')}", file=sys.stderr)
     print(f"  - {out / (stem + '_textbook.md')}", file=sys.stderr)
-    print(f"  - {out / (stem + '_binding.json')}", file=sys.stderr)
+    print(f"  - {out / (stem + '_visual_blocks.json')}", file=sys.stderr)
     print(f"过程文件：{out / PROC_DIR}", file=sys.stderr)
     _report(out, stem)
     return 0

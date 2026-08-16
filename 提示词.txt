@@ -1,0 +1,119 @@
+你是智能体提示词工程师 · Python 操作 pptx 代码专家 · pptx文档解析专家 · 高等教育专家 · pptx文档图文分析专家，下面是我对目前pptx-kb中提取pptx图片的逻辑的判断：
+1、目前的代码能提取像素图、以及像素图带有sRect框的截图；
+2、目前的代码能提取部分的wmf图或svg图；
+3、目前的代码能提取vsdx图；
+4、目前的代码对那些在像素图、OLE矢量图或vsdx矢量图对象上放置了PowerPoint软件绘制的文本框、箭头、shape等混合的图像没有很好的提取和解读能力；
+5、目前的代码对纯粹由PowerPoint软件绘制的文本框、箭头、shape等混合的矢量图的提取效果不明确；
+6、目前的代码对PowerPoint绘制的表格对象的处理效果不明确；
+7、目前的代码对PowerPoint绘制的用各种shape、文本框等拼成的表格图像的处理效果不明确；
+8、目前的代码对由像素图和PowerPoint绘制的各种箭头、shape、文本框等拼成的复杂流程图或逻辑层次图等可视逻辑块的提取效果不好；
+我先给出可视逻辑块的概念：PPT一个页面中由多个各类对象（像素、矢量、shape、公式、文本框、箭头）组成的，占据一定面积的，明确表达一个主题逻辑，具有清晰的表达目的和作用的，服务于页面表达要求的可视化对象集合。一个页面中有可能有多个可视逻辑块，一般6个以内。
+下面就是多个可视逻辑块（Block）组成的一个ppt页面的json结构：
+{
+  "$schema": "pptx_multimodal_slide_v2.0",
+  "slide_info": {
+    "slide_id": "slide_012",
+    "slide_index": 12,
+    "layout_name": "Title and Content",
+    "title": "TCP 三次握手与状态变迁",
+    "notes_text": "教师备注：这里要重点强调 SYN 洪泛攻击的原理..."
+  },
+
+  "textual_content": {
+    "raw_text": "TCP三次握手过程\n1. 客户端发送SYN\n2. 服务端回复SYN+ACK\n3. 客户端发送ACK\n如图所示，建立连接需要三个步骤...",
+    "semantic_summary": "本页主要讲解了TCP协议中三次握手建立连接的核心流程及其状态变迁。",
+    "reading_order": ["title_shape_1", "text_body_2", "blk_01", "text_body_3"] 
+  },
+
+  "visual_blocks": [
+    {
+      "block_id": "blk_01",
+      "block_type": "native_logic_diagram", 
+      "bbox": { "x": 150, "y": 200, "width": 600, "height": 400, "rotation": 0 },
+
+      "assets": {
+        "rendered_image": "./blocks/blk_01/render.png",
+        "vector_svg": "./blocks/blk_01/vector.svg",
+        "internal_resources": [
+          { "type": "embedded_image", "path": "./blocks/blk_01/resources/img_01.png", "desc": "服务器图标素材" }
+        ]
+      },
+
+      "internal_structure": {
+        "topology_type": "directed_graph",
+        "nodes": [
+          { "id": "node_1", "type": "shape", "text": "CLOSED", "bbox_norm": [0.1, 0.1, 0.2, 0.15] },
+          { "id": "node_2", "type": "shape", "text": "SYN_SENT", "bbox_norm": [0.1, 0.4, 0.2, 0.45] }
+        ],
+        "edges": [
+          { "source": "node_1", "target": "node_2", "label": "发送 SYN", "line_style": "solid_arrow" }
+        ],
+        "table_matrix": null 
+      },
+
+      "semantic_description": {
+        "expression_goal": "展示 TCP 协议中客户端与服务端建立连接的三次握手时序及状态机变迁。",
+        "expression_role": "通过可视化时序图，将抽象的网络协议状态（如 SYN_SENT, ESTABLISHED）具象化，帮助学生理解连接建立的同步过程及潜在的丢包重传逻辑。",
+        "vlm_caption": "这是一张垂直时序图，左侧为客户端，右侧为服务端。展示了三次握手的报文交互..."
+      }
+    },
+    {
+      "block_id": "blk_02",
+      "block_type": "virtual_table", 
+      "bbox": { "x": 100, "y": 650, "width": 700, "height": 150 },
+      "assets": {
+        "rendered_image": "./blocks/blk_02/render.png",
+        "vector_svg": null,
+        "internal_resources": []
+      },
+      "internal_structure": {
+        "topology_type": "grid_matrix",
+        "inferred_markdown": "| 状态 | 含义 | 触发条件 |\n|---|---|---|\n| SYN_SENT | 同步已发送 | 客户端发起连接 |",
+        "nodes": [],
+        "edges": []
+      },
+      "semantic_description": {
+        "expression_goal": "总结 TCP 核心状态及其触发条件。",
+        "expression_role": "作为上方时序图的补充，以结构化表格形式固化关键知识点，便于学生对比记忆。",
+        "vlm_caption": "这是一个包含3列3行的表格，列名为状态、含义、触发条件..."
+      }
+    }
+  ],
+
+  "cross_modal_relations": [
+    {
+      "relation_id": "rel_01",
+      "text_anchor": "如图所示，建立连接需要三个步骤",
+      "text_anchor_bbox": { "x": 100, "y": 150, "width": 300, "height": 20 },
+      "target_block_id": "blk_01",
+      "relation_type": "elaboration", 
+      "semantic_link": "文本提出了'三个步骤'的结论，blk_01 的时序图详细展开并证明了这三个步骤的具体报文交互过程。"
+    },
+    {
+      "relation_id": "rel_02",
+      "text_anchor": "TCP三次握手过程",
+      "target_block_id": "blk_01",
+      "relation_type": "title_caption",
+      "semantic_link": "页面标题直接定义了 blk_01 图表的核心主题。"
+    }
+  ]
+}
+上面一开始就是列举了8种可能得可视逻辑块。Json格式包含整个ppt页面和各个可视逻辑块的几何、拓扑、资源、内容、类型，抽象表达特征、在上下文中的具象表达目的和作用等教学语义（semantic_description ）的全栈解析，配合vsdx、jpg、png、wmf、md、latex等资源文件形成多模态教学RAG知识库，能够在后期支持如下的操作：
+1-基于意图的组件检索： 当新PPT需要“解释一个抽象的网络协议状态变迁”时，系统不搜索关键词“TCP”，而是搜索 expression_role == "具象化" AND expression_goal CONTAINS "状态变迁"，从而命中 blk_01。
+2-Layout 适配推理： 如果新生成的页面文本量较大，系统可根据 expression_role 合适的可视逻辑块进行表达，完成信息压缩。
+3-表达特征适配推理： 根据用户目标生成页面的抽象表达特征选择合适的现有库的可视逻辑块抽象表达特征，用以内容填成，生成新的上下文嵌入可视逻辑块。
+4-风格迁移指导： vlm_caption + expression_role 可以指导 AI 绘图工具生成风格一致但内容不同的新图。例如：“保持‘垂直时序图’的表达形式（Role），但将内容替换为‘TLS握手’”。
+5-新知识内容组合：可以根据用户提示词或者知识点选择，组合不同页面的不同的可视逻辑块，形成新的PPT页面；
+根据上述的意见，改造目前pptx-kb下的图片（像素图和矢量图）提取代码，转变成可视逻辑块提取代码，具体要求如下：
+1、利用空间聚类或VLM,或其他方法，实现某个ppt页面的可视逻辑块的分割和类型识别；
+2、生成每个可视逻辑块的图结构或树结构，转成页面的Json格式表达，替换之前的图文绑定json文件；
+3、对每个可视逻辑块进行 Semantic Captioning（包括像素图，替代之前的image captioning）；
+4、在每个页面json文件进行可视逻辑块与页面文字的关系描述；
+5、Json格式包含整个ppt页面和各个可视逻辑块的几何、拓扑、资源、内容、类型，抽象表达特征、在上下文中的具象表达目的和作用等教学语义（semantic_description ）的全栈解析，需要对上述json实例进行扩充；
+6、所有页面的json格式内容合成一个json文件；
+7、所有页面的可视逻辑块渲染图，都放在同一个image目录下；
+8、所有页面的可视逻辑块的资源图，都放在同一个source目录下；
+9、页面文本提取、公式提取、文本扩写等步骤保留；
+10、尽量不改变原先的处理流程；
+11、尽量不改变原先的输出文件结构；
+根据以上的说明和要求，给出完整的技术方案，形成md文档，并给出完整的工作提示词。

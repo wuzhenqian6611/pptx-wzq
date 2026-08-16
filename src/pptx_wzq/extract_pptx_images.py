@@ -96,11 +96,21 @@ def q(pre: str, tag: str) -> str:
 
 PIC = q("p", "pic")
 SP = q("p", "sp")
+CXNSP = q("p", "cxnSp")
 BLIP = q("a", "blip")
 CNVPR = q("p", "cNvPr")
 BG = q("p", "bg")
 OLEOBJ = q("p", "oleObj")
 GRAPHICFRAME = q("p", "graphicFrame")
+
+
+def _sp_text(sp) -> str:
+    """提取 <p:sp>/<p:cxnSp> 内全部 <a:t> 文本（含嵌套段落）。"""
+    parts = []
+    for t in sp.iter(q("a", "t")):
+        if t.text:
+            parts.append(t.text)
+    return "".join(parts).strip()
 
 
 # --------------------------------------------------------------------------
@@ -444,6 +454,185 @@ def iter_charts(slide_xml: bytes):
 
 
 # --------------------------------------------------------------------------
+# 原子对象：原生 shape / 连接符 / 表格 / 文本框（可视逻辑块的数据地基）
+# --------------------------------------------------------------------------
+def iter_native_shapes(slide_xml: bytes):
+    """扫描全部 <p:sp>（含文本框/形状/图形），返回 (shape_name, text, xfrm, z_index)。
+    用于可视逻辑块的空间聚类；注意过滤掉已被 <p:pic>/<p:oleObj>/<p:graphicFrame> 覆盖的对象。
+    不含图片填充的纯形状（如箭头、矩形、圆）也会输出。"""
+    root = ET.fromstring(slide_xml)
+    for idx, sp in enumerate(root.iter(SP)):
+        # 跳过已被独立图片对象处理的形状（<p:pic> 内部也有 <p:sp>）
+        if sp.find(q("p", "pic")) is not None:
+            continue
+        name = ""
+        for cnvpr in sp.iter(CNVPR):
+            name = cnvpr.get("name", "")
+            break
+        text = _sp_text(sp)
+        xfrm = _find_xfrm(sp)
+        if xfrm is None:
+            continue
+        yield name or f"Shape{idx}", text, xfrm, idx
+
+
+def iter_connectors(slide_xml: bytes):
+    """扫描 <p:cxnSp>（连接符/箭头线）。返回 (shape_name, text, xfrm, z_index, start_id, end_id)。
+    start_id/end_id 为 <a:stCxn>/<a:endCxn> 的 id（指向被连接 shape 的 id），可能为空。"""
+    root = ET.fromstring(slide_xml)
+    for idx, cxn in enumerate(root.iter(CXNSP)):
+        name = ""
+        for cnvpr in cxn.iter(CNVPR):
+            name = cnvpr.get("name", "")
+            break
+        text = _sp_text(cxn)
+        xfrm = _find_xfrm(cxn)
+        start_id = end_id = ""
+        for c in cxn.iter(q("a", "stCxn")):
+            start_id = c.get("id", "")
+        for c in cxn.iter(q("a", "endCxn")):
+            end_id = c.get("id", "")
+        if xfrm is None:
+            continue
+        yield name or f"Connector{idx}", text, xfrm, idx, start_id, end_id
+
+
+def iter_tables(slide_xml: bytes):
+    """扫描 <p:graphicFrame> 内含 <a:tbl> 的表格对象。返回 (shape_name, rows, xfrm, z_index)。
+    rows = [[cell_text, ...], ...]（按行组织）。"""
+    root = ET.fromstring(slide_xml)
+    for idx, gf in enumerate(root.iter(GRAPHICFRAME)):
+        tbl = gf.find(".//" + q("a", "tbl"))
+        if tbl is None:
+            continue
+        name = ""
+        for cnvpr in gf.iter(CNVPR):
+            name = cnvpr.get("name", "")
+            break
+        rows = []
+        for tr in tbl.iter(q("a", "tr")):
+            row = []
+            for tc in tr.iter(q("a", "tc")):
+                cells = [t.text or "" for t in tc.iter(q("a", "t"))]
+                row.append("".join(cells).strip())
+            rows.append(row)
+        xfrm = _find_xfrm(gf)
+        yield name or f"Table{idx}", rows, xfrm, idx
+
+
+def _xfrm_to_bbox(xfrm) -> dict:
+    """把 (ox, oy, cx, cy) EMU 元组转成 px bbox dict；异常返回空 bbox。"""
+    try:
+        if xfrm is None:
+            return {"x": 0, "y": 0, "w": 0, "h": 0}
+        return {"x": int(xfrm[0]) / 914400 * 96,
+                "y": int(xfrm[1]) / 914400 * 96,
+                "w": int(xfrm[2]) / 914400 * 96,
+                "h": int(xfrm[3]) / 914400 * 96}
+    except Exception:
+        return {"x": 0, "y": 0, "w": 0, "h": 0}
+
+
+def _collect_atomic_objects(page_no: int, slide_xml: bytes,
+                            page_records: list) -> list:
+    """把本页的图片记录（ImageRecord）与 shape/connector/table 统一映射为
+    原子对象 dict 列表（按 z_index 排序）。图片记录缺 z_index 时排在 shape 之后。"""
+    objs = []
+    # 图片类记录（已有 x/y/shape_w/h）
+    for rec in page_records:
+        if not rec.output_file:
+            continue
+        kind = rec.kind
+        if kind == "picture":
+            fmt = (rec.original_format or "").lower()
+            a_kind = "vector" if fmt in VECTOR else "raster"
+            if fmt in ("vsdx", "vsd"):
+                a_kind = "visio"
+            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
+            objs.append({
+                "obj_id": f"s{page_no:02d}_r{rec.index:02d}",
+                "page": page_no, "kind": a_kind,
+                "shape_name": rec.shape_name or "",
+                "text": "", "bbox": bbox, "z_index": 1000 + rec.index,
+                "source_media": rec.source_media or "",
+                "output_file": rec.output_file or "",
+                "original_format": fmt,
+                "children": [],
+            })
+        elif kind == "chart":
+            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
+            objs.append({
+                "obj_id": f"s{page_no:02d}_c{rec.index:02d}",
+                "page": page_no, "kind": "chart",
+                "shape_name": rec.shape_name or "",
+                "text": "", "bbox": bbox, "z_index": 1000 + rec.index,
+                "source_media": rec.source_media or "",
+                "output_file": rec.output_file or "",
+                "original_format": rec.original_format or "",
+                "children": [],
+            })
+        elif kind == "formula_ole":
+            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
+            objs.append({
+                "obj_id": f"s{page_no:02d}_f{rec.index:02d}",
+                "page": page_no, "kind": "formula",
+                "shape_name": rec.shape_name or "",
+                "text": "", "bbox": bbox, "z_index": 1000 + rec.index,
+                "source_media": rec.source_media or "",
+                "output_file": rec.output_file or "",
+                "original_format": rec.original_format or "",
+                "children": [],
+            })
+        elif kind == "formula_omath":
+            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
+            objs.append({
+                "obj_id": f"s{page_no:02d}_m{rec.index:02d}",
+                "page": page_no, "kind": "formula",
+                "shape_name": rec.shape_name or "",
+                "text": "", "bbox": bbox, "z_index": 1000 + rec.index,
+                "source_media": rec.source_media or "",
+                "output_file": rec.output_file or "",
+                "original_format": rec.original_format or "",
+                "children": [],
+            })
+    # 原生 shape（文本框/图形）
+    for name, text, xfrm, z in iter_native_shapes(slide_xml):
+        if not text and not name:
+            continue
+        objs.append({
+            "obj_id": f"s{page_no:02d}_sp{z:03d}",
+            "page": page_no, "kind": "shape",
+            "shape_name": name, "text": text,
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "source_media": "", "output_file": "",
+            "original_format": "", "children": [],
+        })
+    # 连接符（箭头线）
+    for name, text, xfrm, z, s_id, e_id in iter_connectors(slide_xml):
+        objs.append({
+            "obj_id": f"s{page_no:02d}_cn{z:03d}",
+            "page": page_no, "kind": "connector",
+            "shape_name": name, "text": text or "",
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "source_media": "", "output_file": "",
+            "original_format": "", "children": [],
+            "start_shape_id": s_id, "end_shape_id": e_id,
+        })
+    # 表格
+    for name, rows, xfrm, z in iter_tables(slide_xml):
+        objs.append({
+            "obj_id": f"s{page_no:02d}_tb{z:03d}",
+            "page": page_no, "kind": "table",
+            "shape_name": name, "text": "",
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "source_media": "", "output_file": "",
+            "original_format": "", "children": rows,
+        })
+    objs.sort(key=lambda o: o["z_index"])
+    return objs
+
+
+# --------------------------------------------------------------------------
 # 字节落盘（栅格→PNG 归一化；矢量保留原文件；支持 srcRect 裁剪）
 # --------------------------------------------------------------------------
 RASTER = {"jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp"}
@@ -682,8 +871,10 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
             with_bg_layout: bool = True, rasterize: bool = False,
             raster_dpi: int = 150, raster_prefer: str = "auto",
             crop: bool = True, min_crop: int = 64,
+            with_atomic: bool = True,
             on_progress=None):
-    """主提取流程。on_progress(page_no, n_slides, info) 可选进度回调（默认无）。"""
+    """主提取流程。on_progress(page_no, n_slides, info) 可选进度回调（默认无）。
+    返回 (records, atomic_objects)；with_atomic=False 时 atomic_objects=[]。"""
     pptx_path = Path(pptx_path)
     out_dir = Path(out_dir)
     by_page = out_dir / "by_page"
@@ -693,6 +884,7 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
         all_dir.mkdir(parents=True, exist_ok=True)
 
     records: list = []
+    atomic_objects: list = []
     n_vector_skipped = 0
     # 整页渲染缓存（惰性）：首次遇到需渲染的公式/图表时才调用 LibreOffice
     render_ctx = {"pages": None, "pptx": str(pptx_path),
@@ -781,6 +973,12 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
                         pass
                 records.append(rec)
 
+            # 7) 原子对象收集（可视逻辑块的数据地基：shape/connector/table +
+            #    图片记录映射）。每页按 z_index 顺序输出。
+            if with_atomic:
+                atomic_objects.extend(_collect_atomic_objects(
+                    page_no, slide_xml, records[rec_start:]))
+
             # 进度回调（可选，默认 None 不改变任何行为）
             if on_progress is not None:
                 try:
@@ -822,7 +1020,16 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
                                if rec.original_format in VECTOR and not rec.converted_to_png)
 
     _write_manifest(out_dir, records, len(slides), n_vector_skipped)
-    return records
+
+    # 原子对象落盘（供可视逻辑块聚类使用）
+    if with_atomic and atomic_objects:
+        try:
+            (out_dir / "atomic_objects.json").write_text(
+                json.dumps(atomic_objects, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+        except OSError:
+            pass
+    return records, atomic_objects
 
 
 def _emit(zf, rels, base_dir, page_no, idx, kind, name, rid, by_page, convert,

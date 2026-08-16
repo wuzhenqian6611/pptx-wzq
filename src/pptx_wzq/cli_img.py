@@ -425,6 +425,9 @@ def main(argv=None) -> int:
                     help="YOLO 检测置信度阈值（默认 0.25）")
     ap.add_argument("--no-gallery", action="store_true",
                     help="关闭图片集整理（不生成 images/ 目录与 images.md 清单）")
+    ap.add_argument("--no-atomic", action="store_true",
+                    help="不收集原子对象（shape/connector/table，可视逻辑块"
+                         "数据地基；默认收集并写 atomic_objects.json）")
     ap.add_argument("--no-clean", action="store_true",
                     help="不清理输出目录旧产物（默认启动时清理 by_page/images/"
                          "discarded 等本命令生成的内容，防止旧背景图等残留）")
@@ -447,7 +450,7 @@ def main(argv=None) -> int:
         gallery_cb = make_progress("图片清单")
         if args.json:
             with quiet_stdout():
-                records = E.extract(
+                records, atomic_objects = E.extract(
                     pptx_norm, out,
                     convert=not args.no_convert,
                     all_media=args.all_media,
@@ -458,6 +461,7 @@ def main(argv=None) -> int:
                     raster_prefer=args.raster_prefer,
                     crop=not args.no_crop,
                     min_crop=args.min_crop,
+                    with_atomic=not args.no_atomic,
                     on_progress=cb)
                 filtered = []
                 yolo_used = False
@@ -497,9 +501,10 @@ def main(argv=None) -> int:
             stat["vec_rendered"] = vec_extra["rendered"]
             stat["vec_normalized"] = vec_extra["normalized"]
             stat["images_md"] = images_md
+            stat["atomic_objects"] = len(atomic_objects)
             print_json(stat)
         else:
-            records = E.extract(
+            records, atomic_objects = E.extract(
                 pptx_norm, out,
                 convert=not args.no_convert,
                 all_media=args.all_media,
@@ -510,6 +515,7 @@ def main(argv=None) -> int:
                 raster_prefer=args.raster_prefer,
                 crop=not args.no_crop,
                 min_crop=args.min_crop,
+                with_atomic=not args.no_atomic,
                 on_progress=cb)
             if not args.no_filter:
                 by_page = Path(out) / "by_page"
@@ -551,6 +557,10 @@ def main(argv=None) -> int:
                     on_progress=gallery_cb)
                 print(f"[OK] 图片集：{n_images} 张 → {Path(out) / 'images'}")
                 print(f"     清单：{images_md}")
+            if not args.no_atomic and atomic_objects:
+                print(f"[OK] 原子对象：{len(atomic_objects)} 个"
+                      f"（shape/connector/table/图片，供可视逻辑块聚类）"
+                      f"→ {Path(out) / 'atomic_objects.json'}")
     except Exception as e:  # 核心库内部已优雅降级，此处兜底
         print(f"[错误] 图片提取失败：{e}", file=sys.stderr)
         return EXIT_ERR

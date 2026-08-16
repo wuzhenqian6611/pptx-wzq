@@ -441,7 +441,9 @@ def caption_dir(images_dir: Path, out_path: Path,
 def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="pptx-caption",
-        description="把 images 目录图片逐张喂入视觉大模型做 AI 解读")
+        description="把 images 目录图片逐张喂入视觉大模型做 AI 解读"
+                    "（注意：新流程中该功能已并入 pptx-blocks 的可视逻辑块"
+                    "Semantic Captioning；本命令保留兼容旧流程）")
     ap.add_argument("images_dir", help="图片目录（如 out/images）")
     ap.add_argument("-o", "--output", default=None,
                     help="输出 md 路径（默认 <目录>_captions.md）")
