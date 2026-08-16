@@ -91,16 +91,15 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 ```
 结果目录/
 ├─ images/              教学图片集（PNG + SVG/WMF 矢量 + vsdx/vsd 归档）
-├─ <名>_captions.md     图片理解（已剔除 logo/作者/单位等无关图）
-├─ <名>_textbook.md     教材文案（每页一节；原文超 300 字页直接提取）
-├─ <名>_binding.json    图文绑定 v3.1（按页 {page, text, images[{file, caption,
-│                       source, kind(格式直出), image_id, page, paragraph,
-│                       text_id, w/h/x/y 坐标, position(确定性位置+LLM角色
-│                       ≤40字), relation(图文逻辑关系, LLM, ≤50字)}]}；
-│                       无图文本段不进入绑定；解析兼容 页/节）
+├─ sources/             矢量源文件归档（vsdx/svg/wmf/emf，可编辑资产）
+├─ <名>_texts.md        文本清单（ID | 类型 | 文本 | 坐标；表格行类型）
+├─ <名>_captions.md     图片理解（# images 图片 AI 解读，已剔除无关图）
+├─ <名>_textbook.md     教材文案（直出标注在节标题后；原文超 300 字直出）
+├─ <名>_binding.json    图文绑定 v3.1（page 含 title；图片条目含 image_id/
+│                       text_id/paragraph/坐标/position(LLM角色)/relation）
+├─ images_meta.json     图片元数据（图片→页/尺寸/来源，bind 数据源）
 ├─ <名>_related_filter.json  图文相关性过滤审计（被删图 + 原因）
-├─ state.json           断点续传状态机（步骤 status：pending/running/
-│                       partial/done/failed）
+├─ state.json           断点续传状态机（含 doc_md5/tool_version，换源提示）
 ├─ pipeline.log         运行日志（每步开始/完成/失败时间戳）
 └─ 过程文件/            中间产物（by_page / manifest / texts / formulas / …）
 ```

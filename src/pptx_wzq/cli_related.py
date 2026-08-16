@@ -131,7 +131,7 @@ def _judge_one(client, model: str, caption: str, page_text: str,
 
 def _rewrite_captions(path: Path, entries: list, n_del: int) -> None:
     """重写 captions.md：仅保留相关条目，尾部追加过滤统计。"""
-    lines = [f"# {Path(path).stem} 图片 AI 解读（已过滤无关图）", "",
+    lines = [f"# images 图片 AI 解读（已过滤无关图）", "",
              f"> 由 `pptx-caption` 生成、`pptx-related` 过滤："
              f"原 {n_del + len(entries)} 条，保留 {len(entries)} 条，"
              f"删除 {n_del} 条（明细见 *_related_filter.json）。", ""]

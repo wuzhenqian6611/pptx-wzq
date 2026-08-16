@@ -250,7 +250,10 @@ def extract_texts(pptx_path, out_dir,
                 n_total += 1
                 is_title = it["ph"] in TITLE_PH or \
                     re.search(r"title|标题", it["name"], re.I)
-                label = "标题" if is_title else "内容"
+                if it.get("kind") == "table":
+                    label = "表格行"
+                else:
+                    label = "标题" if is_title else "内容"
                 if is_title:
                     n_title += 1
                 txt_disp = txt.replace("|", "\\|")

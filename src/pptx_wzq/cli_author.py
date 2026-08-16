@@ -444,9 +444,10 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
             content = results.get(p)
             if content is None:
                 continue
-            f.write(f"## 第 {p} 页\n\n{content}\n\n")
+            f.write(f"## 第 {p} 页\n\n")
             if p in direct:
                 f.write(f"> 原文直出（超过 {no_expand_threshold} 字，未扩写）。\n\n")
+            f.write(f"{content}\n\n")
         f.write("---\n\n"
                 f"共 {len(target)} 页（{len(direct)} 页直出 + {len(model_target)} 页模型，"
                 f"{n_batches} 批），学科：{subject}。\n")

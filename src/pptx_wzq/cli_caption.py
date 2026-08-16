@@ -345,7 +345,7 @@ def caption_dir(images_dir: Path, out_path: Path,
         subject = ""
 
     if not (resume and out_path.exists()):
-        _write_header(out_path, images_dir.parent.name or "images",
+        _write_header(out_path, "images",
                       model, n, len(vectors))
         print(f"[落盘] 已创建 {out_path.name}（共 {n} 张）", file=sys.stderr)
     else:

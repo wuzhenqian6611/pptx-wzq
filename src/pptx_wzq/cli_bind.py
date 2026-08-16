@@ -268,6 +268,14 @@ def _pick_paragraph(entries: list) -> tuple:
     return 1, entries[0].get("text_id", "")
 
 
+def _page_title(entries: list) -> str:
+    """该页标题（texts.md 的「标题」类型条目文本，无则 ""）。"""
+    for e in entries:
+        if e.get("type") == "标题":
+            return e.get("text", "")
+    return ""
+
+
 def build_binding(stem: str, textbook: dict, entries_by_page: dict,
                   manifest_by_page: dict, img_by_page: dict,
                   cap_by_file: dict,
@@ -319,6 +327,7 @@ def build_binding(stem: str, textbook: dict, entries_by_page: dict,
                 "relation": rel,
             })
         out_pages.append({"page": p,
+                          "title": _page_title(entries),
                           "text": textbook.get(p, ""),
                           "images": imgs,
                           "has_image": bool(imgs)})

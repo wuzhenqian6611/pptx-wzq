@@ -92,8 +92,16 @@ def _log(out: Path, msg: str) -> None:
 
 
 def _init_state(pptx: Path, out: Path) -> dict:
-    """新建状态机：全部步骤 pending。"""
+    """新建状态机：全部步骤 pending。含 doc_md5 与 tool_version（对齐
+    word .wzq_checkpoint.json §3.7：换源/工具版本变化可提示）。"""
+    import hashlib
+    try:
+        md5 = hashlib.md5(pptx.read_bytes()).hexdigest()
+    except OSError:
+        md5 = ""
     state = {"pptx": str(pptx), "stem": pptx.stem,
+             "doc_md5": md5,
+             "tool_version": VERSION,
              "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
              "steps": {s: {"status": "pending", "note": ""} for s in STEPS}}
     _save_state(out, state)
@@ -481,8 +489,9 @@ def _exec_step(step: str, args, work: Path, stem: str,
 
 
 def _organize(out: Path, work: Path, stem: str) -> None:
-    """产物归位：结果目录=images/ + <名>_captions.md + <名>_textbook.md
-    + <名>_binding.json；其余全部移到 过程文件/。"""
+    """产物归位：结果目录=images/ + sources/ + <名>_captions.md +
+    <名>_textbook.md + <名>_binding.json + images_meta.json；
+    其余全部移到 过程文件/（对齐 word-wzq 交付物体系 v2.3.0）。"""
     proc = out / PROC_DIR
     proc.mkdir(parents=True, exist_ok=True)
 
@@ -505,6 +514,64 @@ def _organize(out: Path, work: Path, stem: str) -> None:
         print(f"[归位] 教材文案 → {out / (stem + '_textbook.md')}",
               file=sys.stderr)
     # binding.json 由 bind 步骤直接写到 out，这里只校验
+
+    # 对齐 word 交付物体系（§2/§3.6）：sources/ 顶层矢量源归档 + images_meta.json
+    manifest_path = work / "img" / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            recs = json.loads(manifest_path.read_text(encoding="utf-8"))
+            vec_exts = {"vsdx", "vsd", "svg", "wmf", "emf"}
+            src_dir = out / "sources"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            n_src = 0
+            by_page_dir = work / "img" / "by_page"
+            for r in recs:
+                fn = r.get("output_file", "")
+                if not fn or (r.get("original_format") or "").lower() \
+                        not in vec_exts:
+                    continue
+                src_file = by_page_dir / fn
+                if src_file.is_file():
+                    try:
+                        shutil.copy2(str(src_file), str(src_dir / fn))
+                        n_src += 1
+                    except OSError:
+                        pass
+            if n_src:
+                print(f"[归位] 矢量源 {n_src} 个 → {src_dir}", file=sys.stderr)
+            else:
+                try:
+                    src_dir.rmdir()
+                except OSError:
+                    pass
+            # images_meta.json（word §3.6 结构，bind 数据源）
+            meta = []
+            for r in recs:
+                fn = r.get("output_file", "")
+                if not fn:
+                    continue
+                meta.append({
+                    "file": fn,
+                    "block": r.get("page", 0),
+                    "par_index": 1,
+                    "in_table": False,
+                    "cx": 0, "cy": 0,
+                    "w": r.get("width", 0) or r.get("shape_w", 0),
+                    "h": r.get("height", 0) or r.get("shape_h", 0),
+                    "kind": (r.get("original_format") or "").lower() or "unknown",
+                    "progid": r.get("ole_progid", ""),
+                    "source": r.get("source_media", ""),
+                })
+            meta_path = out / "images_meta.json"
+            meta_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+            print(f"[归位] images_meta.json（{len(meta)} 条）→ {out}",
+                  file=sys.stderr)
+        except Exception as e:
+            print(f"[警告] images_meta.json/sources 生成失败：{e}",
+                  file=sys.stderr)
+
     # 其余全部进过程文件
     moved = 0
     for item in sorted(work.iterdir()):
@@ -691,6 +758,18 @@ def _main(argv=None) -> int:
             state.get("stem") != stem:
         state = _init_state(pptx, out)
     else:
+        # 换源/工具版本变化提示（对齐 word §3.7）
+        import hashlib
+        try:
+            md5 = hashlib.md5(pptx.read_bytes()).hexdigest()
+        except OSError:
+            md5 = ""
+        if state.get("doc_md5") and md5 and state["doc_md5"] != md5:
+            print("[提示] 检测到源文档已变更（md5 不同），建议 --reset 从头重跑",
+                  file=sys.stderr)
+        if state.get("tool_version") and state["tool_version"] != VERSION:
+            print(f"[提示] 工具版本变化（{state['tool_version']} → {VERSION}），"
+                  f"建议 --reset 重跑", file=sys.stderr)
         _log(out, f"检测到断点状态："
                   f"{sum(1 for s in state['steps'].values() if s['status']=='done')}"
                   f"/{len(STEPS)} 步已完成，重跑本命令将自动续跑")
