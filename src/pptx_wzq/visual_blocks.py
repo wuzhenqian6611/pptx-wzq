@@ -63,6 +63,8 @@ CLUSTER_CONFIG = {
     # 用户准则：大面积对象独立 + 凸区域分割
     "big_area_ratio": 0.30,    # raster/vector/visio 面积 > 整页 30% → 独立成块
     "split_gap_px": 40,        # 凸分割空白走廊阈值：贯穿块 bbox 的空隙 > 该值 → 切分
+    "min_sub_area_ratio": 0.20,  # 凸分割切出的子块面积 < 页面 20% → 不切
+                                  # （用户准则：面积过小的区域不单独成块）
     # 页眉/页脚横幅过滤（战略管理等课件常见的跨页重复装饰色带）
     "banner_ratio": 0.9,       # 宽度 ≥ 90% 页面宽
     "banner_max_h": 80,        # 且高度 ≤ 80px → 判为装饰横幅
@@ -223,20 +225,27 @@ def _union_find_cluster(objects: list[AtomicObject],
 
 
 def _split_cluster_convex(cluster: list, gap_px: int = 40,
-                          page_w: int = 960, page_h: int = 720) -> list:
+                          page_w: int = 960, page_h: int = 720,
+                          min_sub_area: float = None) -> list:
     """凸区域递归分割（用户准则）：删除多字文本框后，剩余连续区域若是凸的
     则为一个可视逻辑块；若是凹的，按最少凸分割拆成若干块。
 
-    近似实现：检测"贯穿块 bbox 的水平/垂直空白走廊"——若存在一条空隙带
-    （高度/宽度 > gap_px）把成员分成上下/左右两群（两侧都有成员），
-    则在此切分；递归直到每个子簇内部无贯穿空白（凸）。
-
-    保护规则：
-    - 单成员簇不切；
-    - 有 connector 连接的簇不切（显式关联的逻辑图，空白可能是布线空隙）；
-    - 切割线两侧任一侧成员数 < 1 或切出的子簇面积过小（< 1/4 块）不切。
+    切割判定（修复：网格结构不再被误切）：
+    1) 规则网格检测：成员中心点行列对齐（≥2列×≥2行且填充率≥60%）→
+       判为 virtual_table（虚拟表格），跳过凸分割——表格的行列间距在
+       投影上就是空隙，若按空隙切会把表格切成碎片；
+    2) 有 connector 的簇不切（显式关联的逻辑图）；
+    3) 真正的"贯穿走廊"：空隙带两侧的成员必须"横跨"空隙（即空隙
+       不是单列/单行的内部间距），且空隙宽度 > gap_px；
+    4) 用户规则：切出的任一子块 bbox 面积 < min_sub_area（默认
+       页面 20%）→ 该切割线无效（不切），防止切出过小碎片块。
     """
     if len(cluster) < 2:
+        return [cluster]
+    if min_sub_area is None:
+        min_sub_area = page_w * page_h * 0.20   # 用户准则：<20% 页面的块不切
+    # 规则网格 → 虚拟表格，不切
+    if _is_grid_table(cluster):
         return [cluster]
     # 有 connector 关联的簇视为显式逻辑图，不切
     if any(o.kind == "connector" for o in cluster):
@@ -248,25 +257,69 @@ def _split_cluster_convex(cluster: list, gap_px: int = 40,
     max_y = max(o.bbox["y"] + o.bbox["h"] for o in cluster)
     bw, bh = max_x - min_x, max_y - min_y
 
-    # --- 水平切割：找贯穿的垂直空白带（在 bbox 内，x 空隙把成员分左右）---
+    # --- 水平切割：找贯穿的垂直空白带（x 空隙把成员分左右）---
     for cut in _find_gaps(
             [(o.bbox["x"], o.bbox["x"] + o.bbox["w"]) for o in cluster],
             bw, gap_px):
         left = [o for o in cluster if o.bbox["x"] + o.bbox["w"] <= cut]
         right = [o for o in cluster if o.bbox["x"] >= cut]
-        if left and right:
-            return (_split_cluster_convex(left, gap_px, page_w, page_h) +
-                    _split_cluster_convex(right, gap_px, page_w, page_h))
-    # --- 垂直切割：找贯穿的水平空白带（在 bbox 内，y 空隙把成员分上下）---
+        if left and right and _cut_ok(left, right, cut, min_sub_area):
+            return (_split_cluster_convex(left, gap_px, page_w, page_h,
+                                          min_sub_area) +
+                    _split_cluster_convex(right, gap_px, page_w, page_h,
+                                          min_sub_area))
+    # --- 垂直切割：找贯穿的水平空白带（y 空隙把成员分上下）---
     for cut in _find_gaps(
             [(o.bbox["y"], o.bbox["y"] + o.bbox["h"]) for o in cluster],
             bh, gap_px):
         top = [o for o in cluster if o.bbox["y"] + o.bbox["h"] <= cut]
         bottom = [o for o in cluster if o.bbox["y"] >= cut]
-        if top and bottom:
-            return (_split_cluster_convex(top, gap_px, page_w, page_h) +
-                    _split_cluster_convex(bottom, gap_px, page_w, page_h))
+        if top and bottom and _cut_ok(top, bottom, cut, min_sub_area):
+            return (_split_cluster_convex(top, gap_px, page_w, page_h,
+                                          min_sub_area) +
+                    _split_cluster_convex(bottom, gap_px, page_w, page_h,
+                                          min_sub_area))
     return [cluster]
+
+
+def _cut_ok(grp_a: list, grp_b: list, cut: float,
+            min_sub_area: float) -> bool:
+    """切割合法性：两侧子块 bbox 面积都 ≥ min_sub_area（防切碎片）。"""
+    for grp in (grp_a, grp_b):
+        gx0 = min(o.bbox["x"] for o in grp)
+        gy0 = min(o.bbox["y"] for o in grp)
+        gx1 = max(o.bbox["x"] + o.bbox["w"] for o in grp)
+        gy1 = max(o.bbox["y"] + o.bbox["h"] for o in grp)
+        if (gx1 - gx0) * (gy1 - gy0) < min_sub_area:
+            return False
+    return True
+
+
+def _is_grid_table(cluster: list) -> bool:
+    """规则网格检测：成员中心点在行列方向都规律对齐 → 虚拟表格。
+    条件：成员 ≥4；按中心点一维聚类出 ≥2 列 且 ≥2 行；
+    成员数 ≥ 行列组合的 60%（允许少量空格）。"""
+    if len(cluster) < 4:
+        return False
+    xs = sorted(round(o.bbox["x"] + o.bbox["w"] / 2) for o in cluster)
+    ys = sorted(round(o.bbox["y"] + o.bbox["h"] / 2) for o in cluster)
+    cols = _cluster_1d(xs, tol=60)
+    rows = _cluster_1d(ys, tol=50)
+    if len(cols) >= 2 and len(rows) >= 2:
+        if len(cluster) >= len(cols) * len(rows) * 0.6:
+            return True
+    return False
+
+
+def _cluster_1d(vals: list, tol: float) -> list:
+    """一维聚类：相邻值差 ≤ tol 合并为同一组，返回组中心列表。"""
+    groups = []
+    for v in vals:
+        if groups and v - groups[-1][-1] <= tol:
+            groups[-1].append(v)
+        else:
+            groups.append([v])
+    return [sum(g) / len(g) for g in groups]
 
 
 def _find_gaps(intervals: list, total: float, gap_px: float) -> list:
@@ -780,10 +833,13 @@ def extract_blocks(pptx_path: str, out_dir: str,
         clusters = _union_find_cluster(objs, cfg)
         # 用户准则②：凸区域递归分割（凹区域按最少凸分割拆成多个块）
         gap_px = cfg.get("split_gap_px", 40)
+        min_sub = cfg.get("page_w", 960) * cfg.get("page_h", 720) * \
+            cfg.get("min_sub_area_ratio", 0.20)
         sub_clusters = []
         for cl in clusters:
             sub_clusters.extend(_split_cluster_convex(
-                cl, gap_px, cfg.get("page_w", 960), cfg.get("page_h", 720)))
+                cl, gap_px, cfg.get("page_w", 960), cfg.get("page_h", 720),
+                min_sub))
         # 大面积对象各自成簇
         for o in big_objs:
             sub_clusters.append([o])
