@@ -11,3 +11,6 @@ yolov5*.pt
 .pytest_cache/
 _*.py
 pptx_wzq-*/
+.workbuddy/
+测试输出/
+lianjie.txt

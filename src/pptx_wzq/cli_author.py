@@ -349,86 +349,112 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                     max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
                     max_pages_per_batch: int = DEFAULT_MAX_PAGES_PER_BATCH,
                     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
+                    no_expand_threshold: int = 300,
                     on_progress=None):
     """生成整份教材文案 md 并落盘；自适应分批，结果合并到一个文件。
 
-    - 输入/输出体量在模型限制内 → 一次调用生成整份；
-    - 超限 → 按页自动分批（每批受输入字符/页数/估算输出三重约束），
-      每批一次调用，各批结果顺序追加到同一个 <名>_textbook.md。
+    - 需求3：逐页预检——该页原始文本（texts 条目拼接、去空白）超过
+      no_expand_threshold（默认 300）字时，**不调用模型**，直接以原文
+      作为该页文案（加「未作扩写」标注），省 Token；
+    - 其余页走模型生成；输入/输出体量超限 → 按页自动分批
+      （每批受输入字符/页数/估算输出三重约束）；
+    - 各页结果按页序统一合并写出（直出页与模型页顺序一致）。
     - pages_filter 给定（如 [1,4]）时，只处理目标页（小批量测试）。
     """
     api_key = os.environ.get(api_key_env, "")
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, base_url=base_url)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)   # 输出目录可不存在
 
     target = pages if pages_filter is None else \
         [p for p in pages if p in pages_filter]
 
-    total_input = len(_build_full_prompt(by_page, target, subject))
-    batches = _make_batches(target, by_page, subject,
-                            max_input_chars, max_pages_per_batch,
-                            max_output_chars)
-    n_batches = len(batches)
-    if n_batches > 1:
-        print(f"[分批] 总输入约 {total_input} 字符 > 单批上限 "
-              f"{max_input_chars}（或估算输出超限），自动拆为 "
-              f"{n_batches} 批："
-              + "、".join(f"{b[0]}~{b[-1]}({len(b)}页)"
-                          for b in batches[:6])
-              + ("…" if n_batches > 6 else ""), file=sys.stderr)
+    # 需求3：原文超阈值页 → 直出，不调用模型
+    direct = {}
+    if no_expand_threshold:
+        for p in target:
+            raw = "".join(by_page[p]["texts"]).replace(" ", "").replace("\n", "")
+            if len(raw) > no_expand_threshold:
+                direct[p] = "\n".join(by_page[p]["texts"])
+    model_target = [p for p in target if p not in direct]
+    if direct:
+        print(f"[直出] {len(direct)} 页原文超过 {no_expand_threshold} 字，"
+              f"直接提取不扩写：页 {'、'.join(map(str, sorted(direct)))}",
+              file=sys.stderr)
 
-    total_out_chars = 0
-    total_out_pages = 0
-    for bi, batch in enumerate(batches, start=1):
-        if on_progress is not None:
-            try:
-                on_progress(bi, n_batches, {"kind": "author"})
-            except Exception:
-                pass
-        full_prompt = _build_full_prompt(by_page, batch, subject)
-        print(f"[批次 {bi}/{n_batches}] 页 {batch[0]}~{batch[-1]}"
-              f"（{len(batch)} 页，输入约 {len(full_prompt)} 字符）",
-              file=sys.stderr)
-        t0 = time.time()
-        text = _gen_textbook(client, full_prompt, subject, model)
-        dt = time.time() - t0
-        chars = len(text)
-        n_out = len(re.findall(r"^##\s*第\s*\d+\s*页\s*$", text,
-                               re.MULTILINE))
-        total_out_chars += chars
-        total_out_pages += n_out
-        print(f"[批次 {bi}/{n_batches}] 完成，耗时 {dt:.0f}s，"
-              f"输出 {chars} 字符，识别到 {n_out} 页节",
-              file=sys.stderr)
-        if n_out < len(batch):
-            print(f"[警告] 本批输出页节数({n_out})少于输入页数"
-                  f"({len(batch)})，可能被截断，可调小 --max-pages-per-batch",
+    results = {}          # page -> 页节内容（不含标题行）
+    for p in sorted(direct):
+        results[p] = direct[p].strip()
+
+    if model_target:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        total_input = len(_build_full_prompt(by_page, model_target, subject))
+        batches = _make_batches(model_target, by_page, subject,
+                                max_input_chars, max_pages_per_batch,
+                                max_output_chars)
+        n_batches = len(batches)
+        if n_batches > 1:
+            print(f"[分批] 总输入约 {total_input} 字符 > 单批上限 "
+                  f"{max_input_chars}（或估算输出超限），自动拆为 "
+                  f"{n_batches} 批："
+                  + "、".join(f"{b[0]}~{b[-1]}({len(b)}页)"
+                              for b in batches[:6])
+                  + ("…" if n_batches > 6 else ""), file=sys.stderr)
+        for bi, batch in enumerate(batches, start=1):
+            if on_progress is not None:
+                try:
+                    on_progress(bi, n_batches, {"kind": "author"})
+                except Exception:
+                    pass
+            full_prompt = _build_full_prompt(by_page, batch, subject)
+            print(f"[批次 {bi}/{n_batches}] 页 {batch[0]}~{batch[-1]}"
+                  f"（{len(batch)} 页，输入约 {len(full_prompt)} 字符）",
                   file=sys.stderr)
-        print(f"[输出预览] {text[:300]}", file=sys.stderr)
-        print("…", file=sys.stderr)
+            t0 = time.time()
+            text = _gen_textbook(client, full_prompt, subject, model)
+            dt = time.time() - t0
+            n_out = len(re.findall(r"^##\s*第\s*\d+\s*页\s*$", text,
+                                   re.MULTILINE))
+            print(f"[批次 {bi}/{n_batches}] 完成，耗时 {dt:.0f}s，"
+                  f"输出 {len(text)} 字符，识别到 {n_out} 页节",
+                  file=sys.stderr)
+            if n_out < len(batch):
+                print(f"[警告] 本批输出页节数({n_out})少于输入页数"
+                      f"({len(batch)})，可能被截断，可调小 --max-pages-per-batch",
+                      file=sys.stderr)
+            print(f"[输出预览] {text[:300]}", file=sys.stderr)
+            print("…", file=sys.stderr)
+            parsed = _split_pages(text)
+            for pg, lines in parsed.items():
+                if pg in batch:
+                    results[pg] = "\n".join(x for x in lines if x.strip()).strip()
+    else:
+        n_batches = 0
 
-        # 落盘：首批创建（带头部说明），后续追加
-        if bi == 1:
-            header = (f"# {out_path.stem} 教材文案\n\n"
-                      f"> 由 `pptx-author` 生成 · 模型 `{model}` · "
-                      f"学科：{subject}\n"
-                      f"> 依据：文本/公式/图片解读三份 PPT 提取文档，"
-                      f"共 {len(target)} 页"
-                      + (f"，分 {n_batches} 批生成" if n_batches > 1 else "")
-                      + "。\n\n")
-            out_path.write_text(header + text.lstrip() + "\n\n",
-                                encoding="utf-8")
-        else:
-            with open(out_path, "a", encoding="utf-8") as f:
-                f.write(text.lstrip() + "\n\n")
-
-    with open(out_path, "a", encoding="utf-8") as f:
+    # 统一按页序写盘（直出页与模型页混合时顺序一致）
+    header = (f"# {out_path.stem} 教材文案\n\n"
+              f"> 由 `pptx-author` 生成 · 模型 `{model}` · 学科：{subject}\n"
+              f"> 依据：文本/公式/图片解读三份 PPT 提取文档，共 {len(target)} 页"
+              + (f"，其中 {len(direct)} 页原文直出" if direct else "")
+              + (f"，分 {n_batches} 批生成" if n_batches > 1 else "")
+              + "。\n\n")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(header)
+        for p in target:
+            content = results.get(p)
+            if content is None:
+                continue
+            f.write(f"## 第 {p} 页\n\n{content}\n\n")
+            if p in direct:
+                f.write(f"> 本页原文已超过 {no_expand_threshold} 字，"
+                        "直接提取，未作扩写。\n\n")
         f.write("---\n\n"
-                f"共 {len(target)} 页（{n_batches} 批），学科：{subject}。\n")
-    return {"pages_in": len(target), "pages_out": total_out_pages,
-            "batches": n_batches, "chars": total_out_chars,
+                f"共 {len(target)} 页（{len(direct)} 页直出 + {len(model_target)} 页模型，"
+                f"{n_batches} 批），学科：{subject}。\n")
+    total_chars = sum(len(v) for v in results.values())
+    return {"pages_in": len(target), "pages_out": len(results),
+            "direct_pages": len(direct), "model_pages": len(model_target),
+            "batches": n_batches, "chars": total_chars,
             "subject": subject, "model": model, "md": str(out_path)}
 
 
@@ -496,6 +522,10 @@ def _main(argv=None) -> int:
                     default=DEFAULT_MAX_OUTPUT_CHARS,
                     help=f"单批估算输出字符上限（默认 {DEFAULT_MAX_OUTPUT_CHARS}；"
                          f"按每页600字折算页数上限）")
+    ap.add_argument("--no-expand-threshold", type=int, default=300,
+                    help="原文直出阈值：某页原始文本（去空白）超过该字数时"
+                         "不调用模型扩写，直接以原文作为教材文案（默认 300；"
+                         "0 关闭直出，全部走模型）")
     ap.add_argument("--json", action="store_true",
                     help="结构化统计输出到 stdout")
     ap.add_argument("--version", action="version", version=VERSION)
@@ -562,6 +592,7 @@ def _main(argv=None) -> int:
                                          max_input_chars=args.max_input_chars,
                                          max_pages_per_batch=args.max_pages_per_batch,
                                          max_output_chars=args.max_output_chars,
+                                         no_expand_threshold=args.no_expand_threshold,
                                          on_progress=cb)
             print_json(result)
         else:
@@ -573,10 +604,13 @@ def _main(argv=None) -> int:
                                      max_input_chars=args.max_input_chars,
                                      max_pages_per_batch=args.max_pages_per_batch,
                                      max_output_chars=args.max_output_chars,
+                                     no_expand_threshold=args.no_expand_threshold,
                                      on_progress=cb)
             print(f"[OK] 教材文案已写出：{out_path}")
             print(f"     输入 {result['pages_in']} 页，分 {result['batches']} 批，"
-                  f"输出 {result['pages_out']} 页节，{result['chars']} 字符")
+                  f"输出 {result['pages_out']} 页节，{result['chars']} 字符"
+                  + (f"（直出 {result['direct_pages']} 页）"
+                     if result.get("direct_pages") else ""))
         return EXIT_OK
     except Exception as e:
         print(f"[错误] 教材文案生成失败：{e}", file=sys.stderr)

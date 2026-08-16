@@ -41,7 +41,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,9 +52,141 @@ from pathlib import Path
 
 from pptx_wzq.cli_common import banner, banner_end
 
-VERSION = "PPT-Paser 2.1.0 (整体编排+确认+汇报+自动装依赖)"
-
+VERSION = "PPT-Paser 3.0.0 (整体编排+断点续传+日志+相关性过滤)"
 PROC_DIR = "过程文件"
+
+# 步骤顺序（含需求5 新增的 related：caption 之后、author 之前）
+STEPS = ["img", "formula", "text", "caption", "related", "author", "bind"]
+
+
+# --------------------------------------------------------------------------
+# 断点续传：state.json（机器可读，原子写）+ pipeline.log（人类可读，追加）
+# --------------------------------------------------------------------------
+def _load_state(out: Path):
+    """读 out/state.json；不存在/损坏返回 None。"""
+    p = out / "state.json"
+    if p.is_file():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _save_state(out: Path, state) -> None:
+    """state.json 原子写（临时文件 + rename）。"""
+    p = out / "state.json"
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    tmp.replace(p)
+
+
+def _log(out: Path, msg: str) -> None:
+    """pipeline.log 追加一行（时间戳 + 消息）。"""
+    try:
+        with open(out / "pipeline.log", "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+def _init_state(pptx: Path, out: Path) -> dict:
+    """新建状态机：全部步骤 pending。"""
+    state = {"pptx": str(pptx), "stem": pptx.stem,
+             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "steps": {s: {"status": "pending", "note": ""} for s in STEPS}}
+    _save_state(out, state)
+    return state
+
+
+def _set_step(out: Path, state: dict, step: str, status: str,
+              note: str = "") -> None:
+    state["steps"][step] = {"status": status, "note": note,
+                            "updated_at": time.strftime(
+                                "%Y-%m-%dT%H:%M:%S")}
+    _save_state(out, state)
+
+
+def _artifact_ok(out: Path, stem: str, step: str) -> bool:
+    """该步骤的产物是否已存在（out 根 / 过程文件 / _proc 三处探测）。"""
+    proc = out / PROC_DIR
+    work = out / "_proc"
+    cands = []
+    if step == "img":
+        cands = [out / "images", proc / "img" / "images",
+                 work / "img" / "images"]
+    elif step == "formula":
+        cands = [proc / "formula", work / "formula"]
+    elif step == "text":
+        cands = [proc / "text", work / "text"]
+    elif step == "caption":
+        cands = [out / f"{stem}_captions.md",
+                 proc / "cap" / "captions.md",
+                 work / "cap" / "captions.md"]
+    elif step == "related":
+        cands = [out / f"{stem}_related_filter.json",
+                 proc / "cap" / f"{stem}_related_filter.json",
+                 work / "cap" / f"{stem}_related_filter.json"]
+    elif step == "author":
+        cands = [out / f"{stem}_textbook.md",
+                 proc / f"{stem}_textbook.md",
+                 work / f"{stem}_textbook.md"]
+    elif step == "bind":
+        cands = [out / f"{stem}_binding.json"]
+    return any(c.is_dir() if c.suffix == "" else c.is_file() for c in cands)
+
+
+def _build_plan(out: Path, stem: str, state: dict, skip: set) -> dict:
+    """每步 → ("skip"|"run"|"resume", 说明)。规则：
+    - done 且产物存在 → skip；done 但产物缺失 → run（重跑）；
+    - partial → resume；failed/无记录 → run。"""
+    plan = {}
+    for s in STEPS:
+        if s in skip:
+            plan[s] = ("skip", "用户 --skip 指定")
+            continue
+        st = (state or {}).get("steps", {}).get(s, {})
+        status = st.get("status")
+        if status == "done":
+            if _artifact_ok(out, stem, s):
+                plan[s] = ("skip", "已完成（state=done 且产物存在）")
+            else:
+                plan[s] = ("run", "状态为完成但产物缺失，重跑")
+        elif status == "partial":
+            plan[s] = ("resume", "上次中断，断点续跑")
+        else:
+            plan[s] = ("run", st.get("note") or "")
+    return plan
+
+
+def _reset_out(out: Path, stem: str) -> None:
+    """--reset：清空本管线生成的全部旧产物与状态（保留目录本身）。"""
+    for p in (out / "images", out / PROC_DIR, out / "_proc",
+              out / "state.json", out / "pipeline.log",
+              out / f"{stem}_captions.md", out / f"{stem}_textbook.md",
+              out / f"{stem}_binding.json",
+              out / f"{stem}_related_filter.json"):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.is_file():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    _log(out, "--reset：已清空旧产物与状态")
+
+
+def _print_plan(plan: dict, est: dict, skip: set) -> None:
+    """打印执行/续跑计划（含每步动作与原因）。"""
+    print("\n========== 执行计划（含断点续跑判断） ==========", file=sys.stderr)
+    for s in STEPS:
+        action, note = plan[s]
+        mark = {"skip": "跳过", "run": "执行", "resume": "续跑"}[action]
+        print(f"  {s:8s} [{mark}] {note}", file=sys.stderr)
+    print(f"  规模：约 {est['slides']} 页 / 媒体 {est['media']} 个 / "
+          f"公式对象 {est['embeds']} 个", file=sys.stderr)
+    print("", file=sys.stderr)
 
 # KEY 注册引导（网页 / 用途 / 资费）
 KEY_GUIDE = {
@@ -224,6 +358,128 @@ def _run_step(name: str, script: str, args_list: list, cwd: Path,
     print("", file=sys.stderr)
 
 
+def _missing_author_pages(work: Path, stem: str) -> str | None:
+    """author 续跑：texts.md 全部页 - textbook.md 已有页 → 缺失页串。"""
+    texts = work / "text" / f"{stem}_texts.md"
+    tb = work / f"{stem}_textbook.md"
+    if not tb.is_file() or not texts.is_file():
+        return None
+
+    def pages_of(path: Path) -> set:
+        out = set()
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^##\s*第\s*(\d+)\s*页\s*$", ln.strip())
+            if m:
+                out.add(int(m.group(1)))
+        return out
+    todo = sorted(pages_of(texts) - pages_of(tb))
+    return ",".join(map(str, todo)) if todo else None
+
+
+def _exec_step(step: str, args, work: Path, stem: str,
+               action: str) -> None:
+    """执行单个步骤（img/formula/text/caption/related/author/bind）。
+    action: run | resume（resume 透传给子命令的续跑参数）。"""
+    pptx = Path(args.pptx)
+    total = len(STEPS)
+    idx = STEPS.index(step) + 1
+    if step == "img":
+        _run_step(
+            "图片提取+过滤+图片集（vsdx 直接存 .vsdx，矢量规范化 svg/wmf）",
+            "cli_img",
+            [pptx, "-o", work / "img"], ".",
+            desc="解析 PPT 全部图片类对象（<p:pic> 图片 / 形状填充 / 页面背景 / "
+                 "OLE 公式 / 图表 / Visio 嵌入对象）→ 三路过滤 → Visio OLE 按"
+                 "容器存 .vsdx/.vsd、emf/wmf/svg 规范化 svg（失败回退 wmf）→ "
+                 "位图封装 WMF 渲染+OCR → 教学图片集",
+            resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
+                     "PowerPoint / LibreOffice(可选)",
+            outs=[work / "img" / "images"], idx=idx, total=total)
+    elif step == "formula":
+        _run_step(
+            "公式提取", "cli_formula",
+            [pptx, "-o", work / "formula"], ".",
+            desc="遍历全部公式对象，三路径级联转为 LaTeX：路径1 原生 OMML "
+                 "（omml2latex）→ 路径2 Equation.3 公式编辑器（MTEF 解码）→ "
+                 "路径3 渲染 + 数学 OCR（缺失时降级为占位）→ 按页输出 "
+                 "<名>_formulas.md",
+            resource="本地计算（0 Token）· 依赖 omml2latex / olefile / "
+                     "mtef_decoder；OCR 可选",
+            outs=[work / "formula"], idx=idx, total=total)
+    elif step == "text":
+        _run_step(
+            "文本提取（文本 ID + 坐标）", "cli_text",
+            [pptx, "-o", work / "text"], ".",
+            desc="逐页提取文本框 / 表格 / 标题占位符文本（排除页眉页脚），"
+                 "每条分配 text_id（TXT###-##）并记录幻灯片坐标 x/y/w/h → "
+                 "<名>_texts.md + <名>_text_entries.json",
+            resource="本地计算（0 Token）· 仅依赖 Python 标准库 XML 解析",
+            outs=[work / "text"], idx=idx, total=total)
+    elif step == "caption":
+        cap_args = [work / "img" / "images", "-o", work / "cap" / "captions.md",
+                    "--texts", work / "text" / f"{stem}_texts.md",
+                    "--formulas", work / "formula" / f"{stem}_formulas.md"]
+        if action == "resume":
+            cap_args.append("--resume")
+        _run_step(
+            "图片 AI 解读（文档上下文模式）", "cli_caption", cap_args, ".",
+            desc="先由前几页文本让模型判断课程/专业名，再对 images/ 每张图 "
+                 "附带「该页文本+公式」上下文喂入视觉大模型 qwen3.7-plus，"
+                 "从教材角度输出 100~200 字图片理解 → <名>_captions.md；"
+                 + ("断点续跑：跳过已完成图片" if action == "resume"
+                    else "增量落盘、失败重试"),
+            resource="消耗 Token（视觉模型 qwen3.7-plus，DASHSCOPE_API_KEY）",
+            outs=[work / "cap"], idx=idx, total=total)
+    elif step == "related":
+        _run_step(
+            "图文相关性过滤（剔除 logo/作者/单位等无关图）", "cli_related",
+            [work / "cap", "-o", work / "cap" / "captions.md",
+             "--texts", work / "text" / f"{stem}_texts.md",
+             "--images-dir", work / "img" / "images"], ".",
+            desc="把每张图的 qwen 诠释与该页正文交给 DeepSeek 判断相关性，"
+                 "无关图（品牌 logo / 作者信息 / 单位名称 / 项目类别 / "
+                 "每页重复装饰 / 二维码等）从 images/、by_page/、captions.md "
+                 "中删除 → <名>_related_filter.json 审计",
+            resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
+            outs=[work / "cap"], idx=idx, total=total)
+    elif step == "author":
+        au = ["--texts", work / "text" / f"{stem}_texts.md",
+              "--formulas", work / "formula" / f"{stem}_formulas.md",
+              "--captions", work / "cap" / "captions.md",
+              "-o", work / f"{stem}_textbook.md"]
+        if action == "resume":
+            miss = _missing_author_pages(work, stem)
+            if miss:
+                au += ["--pages", miss]
+                print(f"[续跑] author：只生成缺失页 {miss}", file=sys.stderr)
+            else:
+                au += ["--pages", "0"]   # 无缺失页：空跑保持已完成
+        _run_step(
+            "教材文案生成（原文超 300 字直出）", "cli_author", au, ".",
+            desc="学科自动推断 → 文本/公式/图片解读三份文档输入 DeepSeek "
+                 "deepseek-v4-flash 逐页生成教材文案；某页原文去空白超过 "
+                 "--no-expand-threshold（默认 300）字时直接提取原文、不调用"
+                 "模型 → <名>_textbook.md；超长自动分批",
+            resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
+            outs=[work], idx=idx, total=total)
+    elif step == "bind":
+        bd = [work, "-o", work.parent / f"{stem}_binding.json",
+              "--textbook", work / f"{stem}_textbook.md",
+              "--images-dir", work / "img" / "images",
+              "--captions", work / "cap" / "captions.md"]
+        if action == "resume":
+            bd.append("--resume")
+        _run_step(
+            "图文关系绑定（图片ID/文本ID/坐标/逻辑关系）", "cli_bind", bd, ".",
+            desc="按页组织 文本条目（text_id+坐标）与图片（image_id+幻灯片"
+                 "坐标 position），并调用 deepseek-v4-flash 依据 qwen 诠释+"
+                 "该页文本生成 ≤60 字图文逻辑关系（relation）→ binding.json，"
+                 "作为检索、知识图谱与个性化学习的索引基石",
+            resource="消耗 Token（逻辑关系：文本模型 deepseek-v4-flash，"
+                     "DEEPSEEK_API_KEY）",
+            outs=[work / "img" / "images"], idx=idx, total=total)
+
+
 def _organize(out: Path, work: Path, stem: str) -> None:
     """产物归位：结果目录=images/ + <名>_captions.md + <名>_textbook.md
     + <名>_binding.json；其余全部移到 过程文件/。"""
@@ -304,17 +560,26 @@ def _plan_and_confirm(est: dict, skip: set) -> bool:
                       f"每图附带该页文本/公式上下文。"
                       f"**预计消耗约 {est_cap//1000} 万~{int(est_cap*1.3)//1000} 万 Token**，"
                       f"耗时约 {max(1, n_img*8//60)} 分钟。"))
+    if "related" not in skip:
+        est_rel = n_img * (300 + 200 + 100)
+        steps.append(("5. 图文相关性过滤（消耗 Token）",
+                      f"约 {n_img} 张图的诠释与该页正文交 DeepSeek "
+                      f"(deepseek-v4-flash) 判定相关性，剔除 logo/作者/单位等"
+                      f"无关图。"
+                      f"**预计消耗约 {max(1, est_rel//1000)} 万 Token**，"
+                      f"耗时约 {max(1, n_img*3//60)} 分钟。"))
     if "author" not in skip:
         est_au = (n_s * 500 + n_f * 80 + n_s * 400)
-        steps.append(("5. 教材文案生成（消耗 Token）",
+        steps.append(("6. 教材文案生成（消耗 Token）",
                       f"文本/公式/图片理解三份文档输入 DeepSeek "
-                      f"(deepseek-v4-flash) 生成 {n_s} 页教材文案。"
+                      f"(deepseek-v4-flash) 生成 {n_s} 页教材文案；"
+                      f"原文超 300 字的页直接提取不扩写。"
                       f"**预计消耗约 {est_au//1000} 万~{int(est_au*1.5)//1000} 万 Token**，"
                       f"耗时约 {max(1, n_s*12//60)} 分钟。"))
     if "bind" not in skip:
-        steps.append(("6. 图文关系绑定",
-                      "把每页教材文案与该页图片关系绑定为 JSON。"
-                      "本地执行，不消耗 API。"))
+        steps.append(("7. 图文关系绑定（含逻辑关系，消耗 Token）",
+                      "按页绑定文本条目/图片（ID+坐标），并调用 DeepSeek "
+                      "生成每张图的 ≤60 字图文逻辑关系。"))
 
     print("\n========== 执行计划 ==========", file=sys.stderr)
     for name, desc in steps:
@@ -383,12 +648,16 @@ def _main(argv=None) -> int:
                     help="生成结果目录（结果文件+过程文件/ 放这里）")
     ap.add_argument("--skip", default=None,
                     help="逗号分隔跳过步骤：img,formula,text,caption,"
-                         "author,bind")
+                         "related,author,bind")
     ap.add_argument("--author-pages", default=None,
                     help="透传给教材文案指令：只生成指定页，如 '1,4'"
                          "（默认全部，测试用）")
     ap.add_argument("--no-install", action="store_true",
                     help="不自动安装缺失的组件库（默认自动 pip 安装）")
+    ap.add_argument("--reset", action="store_true",
+                    help="强制从头重跑：清空 state.json/日志与全部旧产物")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="仅打印续跑/执行计划，不执行任何步骤")
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
 
@@ -412,107 +681,67 @@ def _main(argv=None) -> int:
     if not _ensure_keys():
         return 2
 
-    # 3) 执行计划 + token 估算 + 用户确认
+    # 3) 断点状态：读取/初始化 state.json；--reset 清空后重建
+    state = _load_state(out)
+    if args.reset:
+        print("[重置] --reset：清空旧产物与状态，从头执行", file=sys.stderr)
+        _reset_out(out, stem)
+        state = None
+    if state is None or state.get("pptx") != str(pptx) or \
+            state.get("stem") != stem:
+        state = _init_state(pptx, out)
+    else:
+        _log(out, f"检测到断点状态："
+                  f"{sum(1 for s in state['steps'].values() if s['status']=='done')}"
+                  f"/{len(STEPS)} 步已完成，重跑本命令将自动续跑")
+    # 3b) 续跑计划 + token 估算 + 用户确认
     est = _estimate_usage(pptx)
-    print(f"[规模] 约 {est['slides']} 页 / 媒体 {est['media']} 个 / "
-          f"公式对象 {est['embeds']} 个", file=sys.stderr)
-    if not _plan_and_confirm(est, skip):
-        print("[取消] 已取消执行（如需重跑，重新运行本指令即可）。",
+    plan = _build_plan(out, stem, state, skip)
+    _print_plan(plan, est, skip)
+    if args.dry_run:
+        print("[DRY-RUN] 以上为续跑/执行计划，未执行任何步骤。",
+              file=sys.stderr)
+        print("[DRY-RUN] 确认后去掉 --dry-run 重跑即可按此计划执行。",
+              file=sys.stderr)
+        return 0
+    todo = {s for s, (a, _) in plan.items() if a != "skip"}
+    if todo and not _plan_and_confirm(est, skip):
+        print("[取消] 已取消执行（重新运行本指令即可按断点继续）。",
               file=sys.stderr)
         return 0
 
-    # 4) 依次执行
+    # 4) 依次执行（skip 跳过 / run 执行 / resume 断点续跑）
     work = out / "_proc"
     try:
-        if "img" not in skip:
-            _run_step(
-                "图片提取+过滤+图片集", "cli_img",
-                [pptx, "-o", work / "img"], ".",
-                desc="解析 PPT 包内全部图片类对象（<p:pic> 图片 / 形状填充 / "
-                     "页面背景 / OLE 公式 / 图表）→ 按教学判据三路过滤（尺寸过小、"
-                     "比例过限、纯色、孤立碎片 + YOLO 教学语义）→ 位图封装 WMF "
-                     "识别与 PowerPoint 渲染（公式版补提 LaTeX、曲线版转 PNG）→ "
-                     "生成教学图片集",
-                resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
-                         "PowerPoint 渲染",
-                outs=[work / "img" / "images"], idx=1)
-        if "formula" not in skip:
-            _run_step(
-                "公式提取", "cli_formula",
-                [pptx, "-o", work / "formula"], ".",
-                desc="遍历全部公式对象，三路径级联转为 LaTeX：路径1 原生 OMML "
-                     "（omml2latex）→ 路径2 Equation.3 公式编辑器（MTEF 解码）→ "
-                     "路径3 渲染 + 数学 OCR（缺失时降级为占位，不崩溃）→ 按页输出 "
-                     "<名>_formulas.md，并以符号判据过滤误识别碎片",
-                resource="本地计算（0 Token）· 依赖 omml2latex / olefile / "
-                         "mtef_decoder；OCR 可选",
-                outs=[work / "formula"], idx=2)
-        if "text" not in skip:
-            _run_step(
-                "文本提取", "cli_text",
-                [pptx, "-o", work / "text"], ".",
-                desc="逐页提取文本框 / 表格 / 标题占位符文本，排除页眉、页脚与 "
-                     "页码；输出 ID|类型|文本 清单 <名>_texts.md（标题条目将用于 "
-                     "教材 HTML 章节命名）",
-                resource="本地计算（0 Token）· 仅依赖 Python 标准库 XML 解析",
-                outs=[work / "text"], idx=3)
-        if "caption" not in skip:
-            _run_step(
-                "图片 AI 解读（文档上下文模式）", "cli_caption",
-                [work / "img" / "images", "-o",
-                 work / "cap" / "captions.md",
-                 "--texts", work / "text" / f"{stem}_texts.md",
-                 "--formulas", work / "formula" / f"{stem}_formulas.md"],
-                ".",
-                desc="先由前几页文本让模型判断课程/专业名，再对 images/ 每张图 "
-                     "附带「该页文本+公式」上下文喂入视觉大模型 qwen3.7-plus，"
-                     "从教材角度输出 100~200 字图片理解（图片类型 / 内容理解 / "
-                     "教学用途）→ <名>_captions.md；损坏图预检跳过、失败自动重试、"
-                     "增量落盘",
-                resource=f"消耗 Token（约 {len(list((work/'img'/'images').glob('*.png')))} "
-                         f"张图 × 每张约 1~2K token）· 视觉模型 qwen3.7-plus "
-                         f"（DASHSCOPE_API_KEY）",
-                outs=[work / "cap"], idx=4)
-        if "author" not in skip:
-            au = ["--texts", work / "text" / f"{stem}_texts.md",
-                  "--formulas", work / "formula" / f"{stem}_formulas.md",
-                  "--captions", work / "cap" / "captions.md",
-                  "-o", work / f"{stem}_textbook.md"]
-            if args.author_pages:
-                au += ["--pages", args.author_pages]
-            _run_step(
-                "教材文案生成", "cli_author", au, ".",
-                desc="学科自动推断（模型判断课程/专业名填入提示词）→ 将文本、"
-                     "公式、图片理解三份文档全文输入 DeepSeek 大模型 "
-                     "deepseek-v4-flash，生成每页 ≥300 字的教材口吻文案（不遗漏"
-                     "任何一页、任何公式）→ <名>_textbook.md；超长自动分批合并、"
-                     "防截断",
-                resource="消耗 Token（输入=三份文档全文，输出≈页数×约 600 字）· "
-                         "文本模型 deepseek-v4-flash（DEEPSEEK_API_KEY）",
-                outs=[work], idx=5)
-        if "bind" not in skip:
-            _run_step(
-                "图文关系绑定", "cli_bind",
-                [work, "-o", out / f"{stem}_binding.json",
-                 "--textbook", work / f"{stem}_textbook.md",
-                 "--images-dir", work / "img" / "images",
-                 "--captions", work / "cap" / "captions.md"], ".",
-                desc="把每页教材文案与该页图片及解读绑定为结构化 JSON（按页 "
-                     "page / text / images[{file,caption}] / has_image 组织），"
-                     "作为检索、知识图谱与个性化学习的索引基石",
-                resource="本地计算（0 Token）",
-                outs=[work / "img" / "images"], idx=6)
-
-        # 4) 产物归位
+        for s in STEPS:
+            action, note = plan[s]
+            if action == "skip":
+                print(f"[跳过] {s}：{note}", file=sys.stderr)
+                continue
+            print(f"\n[开始] 步骤 {s}（{note or '执行'}）", file=sys.stderr)
+            _set_step(out, state, s, "running", note)
+            _log(out, f"步骤 {s} 开始（{action}）")
+            try:
+                _exec_step(s, args, work, stem, action)
+            except RuntimeError as e:
+                _set_step(out, state, s, "failed", str(e))
+                _log(out, f"步骤 {s} 失败：{e}")
+                raise
+            _set_step(out, state, s, "done")
+            _log(out, f"步骤 {s} 完成")
+        # 产物归位
         _organize(out, work, stem)
+        _log(out, "全部步骤完成，产物已归位")
 
     except RuntimeError as e:
         print(f"\n[错误] {e}", file=sys.stderr)
-        print("[提示] 可用 --skip 跳过已完成步骤后重跑（如 "
-              "--skip img,formula,text）", file=sys.stderr)
+        print("[提示] 重新运行本命令将依据 state.json **自动续跑**"
+              "未完成的步骤（或用 --skip 手动跳过）；--dry-run 可预览计划。",
+              file=sys.stderr)
         return 1
     except Exception as e:
         print(f"\n[错误] 整体运行异常：{e}", file=sys.stderr)
+        _log(out, f"整体运行异常：{e}")
         return 1
 
     print("\n===== PPT-Paser 全部完成 =====", file=sys.stderr)

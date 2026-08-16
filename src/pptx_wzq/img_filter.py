@@ -37,7 +37,7 @@ import struct
 import sys
 from pathlib import Path
 
-VECTOR_EXTS = {"emf", "wmf", "svg"}
+VECTOR_EXTS = {"emf", "wmf", "svg", "vsdx", "vsd"}
 # 图片集收录的格式（栅格 + 矢量；公式 bin / chart xml 等不进图片集）
 GALLERY_EXTS = {"png", "jpg", "jpeg", "bmp", "gif", "webp",
                 "tif", "tiff"} | VECTOR_EXTS

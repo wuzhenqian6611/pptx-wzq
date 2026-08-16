@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pptx-wzq"
-version = "1.0.6"
-description = "PPT 多模态教学知识库自动化构建：图片/公式/文本提取 → 图片AI解读 → 教材文案 → 图文绑定 → 教材HTML/Deck"
+version = "1.2.0"
+description = "PPT 多模态教学知识库自动化构建：图片/公式/文本提取（含 vsdx 与矢量规范化、文本坐标）→ 图片AI解读 → 图文相关性过滤 → 教材文案（300字直出）→ 图文绑定（ID/坐标/逻辑关系/图片作用）→ 教材HTML/Deck；断点续传+日志"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Wu Zheqian" }]
-keywords = ["pptx", "education", "knowledge-base", "multimodal", "latex", "ocr"]
+keywords = ["pptx", "education", "knowledge-base", "multimodal", "latex", "ocr", "visio", "vsdx"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Education",
@@ -37,6 +37,7 @@ pptx-img = "pptx_wzq.cli_img:main"
 pptx-formula = "pptx_wzq.cli_formula:main"
 pptx-text = "pptx_wzq.cli_text:main"
 pptx-caption = "pptx_wzq.cli_caption:main"
+pptx-related = "pptx_wzq.cli_related:main"
 pptx-author = "pptx_wzq.cli_author:main"
 pptx-bind = "pptx_wzq.cli_bind:main"
 pptx-paser = "pptx_wzq.cli_paser:main"

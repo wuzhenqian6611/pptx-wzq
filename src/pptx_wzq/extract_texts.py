@@ -64,7 +64,8 @@ def _sp_text(sp) -> str:
 
 
 def _sp_meta(sp):
-    """返回 (shape_name, ph_type)。"""
+    """返回 (shape_name, ph_type, x, y, w, h)。
+    坐标为形状在幻灯片上的位置与尺寸（EMU→px，来自 <a:xfrm> off/ext）。"""
     name = ""
     for cnvpr in sp.iter(_q("p", "cNvPr")):
         name = cnvpr.get("name", "")
@@ -73,7 +74,21 @@ def _sp_meta(sp):
     for ph in sp.iter(_q("p", "ph")):
         ph_type = ph.get("type", "obj")
         break
-    return name, ph_type
+    x = y = w = h = 0
+    try:
+        xfrm = sp.find(".//" + _q("a", "xfrm"))
+        if xfrm is not None:
+            off = xfrm.find(_q("a", "off"))
+            ext = xfrm.find(_q("a", "ext"))
+            if off is not None:
+                x = int(off.get("x", 0)) / 914400 * 96
+                y = int(off.get("y", 0)) / 914400 * 96
+            if ext is not None:
+                w = int(ext.get("cx", 0)) / 914400 * 96
+                h = int(ext.get("cy", 0)) / 914400 * 96
+    except Exception:
+        pass
+    return name, ph_type, x, y, w, h
 
 
 def _table_text(gf) -> str:
@@ -92,14 +107,14 @@ def _table_text(gf) -> str:
 
 
 def _iter_slide_texts(slide_xml: bytes, with_tables: bool = True):
-    """遍历 slide 全部文本对象，产出 (kind, name, ph_type, text)。"""
+    """遍历 slide 全部文本对象，产出 (kind, name, ph_type, text, x, y, w, h)。"""
     root = ET.fromstring(slide_xml)
     for sp in root.iter(SP):
         txt = _sp_text(sp)
         if not txt:
             continue
-        name, ph_type = _sp_meta(sp)
-        yield ("sp", name, ph_type, txt)
+        name, ph_type, x, y, w, h = _sp_meta(sp)
+        yield ("sp", name, ph_type, txt, x, y, w, h)
     if with_tables:
         for gf in root.iter(GRAPHICFRAME):
             txt = _table_text(gf)
@@ -108,7 +123,21 @@ def _iter_slide_texts(slide_xml: bytes, with_tables: bool = True):
                 for cnvpr in gf.iter(_q("p", "cNvPr")):
                     name = cnvpr.get("name", "")
                     break
-                yield ("table", name or "表格", "tbl", txt)
+                x = y = w = h = 0
+                try:
+                    xfrm = gf.find(".//" + q("a", "xfrm"))
+                    if xfrm is not None:
+                        off = xfrm.find(q("a", "off"))
+                        ext = xfrm.find(q("a", "ext"))
+                        if off is not None:
+                            x = int(off.get("x", 0)) / 914400 * 96
+                            y = int(off.get("y", 0)) / 914400 * 96
+                        if ext is not None:
+                            w = int(ext.get("cx", 0)) / 914400 * 96
+                            h = int(ext.get("cy", 0)) / 914400 * 96
+                except Exception:
+                    pass
+                yield ("table", name or "表格", "tbl", txt, x, y, w, h)
 
 
 def _fixed_texts(zf: zipfile.ZipFile) -> set:
@@ -160,10 +189,11 @@ def extract_texts(pptx_path, out_dir,
                 except Exception:
                     pass
             items = []
-            for kind, name, ph, txt in _iter_slide_texts(zf.read(slide_path),
-                                                         with_tables):
+            for kind, name, ph, txt, x, y, w, h in \
+                    _iter_slide_texts(zf.read(slide_path), with_tables):
                 items.append({"kind": kind, "name": name, "ph": ph,
-                              "text": txt.strip()})
+                              "text": txt.strip(),
+                              "x": x, "y": y, "w": w, "h": h})
             all_pages_texts.append(items)
 
         # 跨页重复统计（≥90% 页面相同 → 全局固定文本）
@@ -183,15 +213,15 @@ def extract_texts(pptx_path, out_dir,
                  f"> 由 `pptx-text` 提取（共 {n_slides} 页）。"
                  "每个文本对象一行；ID 页内递增；已排除页眉/页脚/页码/"
                  "母版固定文本" + ("" if filter_texts else "（--no-filter 全量）"),
-                 "> 格式：`ID | 类型 | 文本`；`[标题]` 来自标题占位符，"
-                 "其余为 `[内容]`（含表格行）。", ""]
+                 "> 格式：`ID | 类型 | 文本 | 坐标`；`[标题]` 来自标题占位符，"
+                 "其余为 `[内容]`（含表格行）。坐标=(x,y) 宽x高（px，幻灯片坐标系）。", ""]
         n_title = n_total = n_filtered = 0
         entries = []
         for page_no, items in enumerate(all_pages_texts, start=1):
             lines.append(f"## 第 {page_no} 页")
             lines.append("")
-            lines.append("| ID | 类型 | 文本 |")
-            lines.append("|---|---|---|")
+            lines.append("| ID | 类型 | 文本 | 坐标 |")
+            lines.append("|---|---|---|---|")
             kept_this = 0
             for it in items:
                 txt = it["text"]
@@ -205,12 +235,16 @@ def extract_texts(pptx_path, out_dir,
                         reason = "跨页全局固定文本"
                     elif len(txt) < min_len:
                         reason = f"过短(<{min_len}字符)"
+                pos = f"({int(it['x'])},{int(it['y'])}) " \
+                      f"{int(it['w'])}x{int(it['h'])}"
                 if reason is not None:
                     n_filtered += 1
                     entries.append({"page": page_no, "id": None,
                                     "type": "排除", "text": txt,
                                     "reason": reason,
-                                    "shape": it["name"], "ph": it["ph"]})
+                                    "shape": it["name"], "ph": it["ph"],
+                                    "x": it["x"], "y": it["y"],
+                                    "w": it["w"], "h": it["h"]})
                     continue
                 kept_this += 1
                 n_total += 1
@@ -221,11 +255,13 @@ def extract_texts(pptx_path, out_dir,
                     n_title += 1
                 txt_disp = txt.replace("|", "\\|")
                 lines.append(f"| TXT{page_no:03d}-{kept_this:02d} | "
-                             f"{label} | {txt_disp} |")
+                             f"{label} | {txt_disp} | {pos} |")
                 entries.append({"page": page_no,
                                 "id": f"TXT{page_no:03d}-{kept_this:02d}",
                                 "type": label, "text": txt,
-                                "shape": it["name"], "ph": it["ph"]})
+                                "shape": it["name"], "ph": it["ph"],
+                                "x": it["x"], "y": it["y"],
+                                "w": it["w"], "h": it["h"]})
             lines.append("")
 
         lines.append("---")

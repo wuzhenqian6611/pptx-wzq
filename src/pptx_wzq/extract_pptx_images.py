@@ -137,7 +137,7 @@ def normalize_path(p: str) -> str:
 class ImageRecord:
     page: int
     index: int
-    kind: str               # picture | fill | background | formula_ole | formula_omath | chart
+    kind: str               # picture | fill | background | formula_ole | formula_omath | chart | visio
     shape_name: str
     source_media: str
     output_file: str
@@ -150,6 +150,10 @@ class ImageRecord:
     cropped: str = ""       # "" | "yes" | "no" | "full"(裁出过小退化)
     x: float = 0            # 在幻灯片中的位置（px，来自 <a:xfrm><a:off> EMU）
     y: float = 0
+    shape_w: float = 0      # 在幻灯片上的显示宽高（px，来自 <a:xfrm><a:ext> EMU）
+    shape_h: float = 0
+    ole_progid: str = ""    # OLE 对象 progId（识别 Visio/公式编辑器等）
+    preview_file: str = ""  # visio 对象关联的预览图文件名（EMF/SVG，可空）
 
 
 # --------------------------------------------------------------------------
@@ -255,8 +259,23 @@ def _xfrm_xy(el) -> tuple:
         return 0.0, 0.0
 
 
+def _xfrm_wh(el) -> tuple:
+    """从形状元素解析 <a:xfrm><a:ext> 显示宽高（EMU→px）。"""
+    try:
+        xfrm = el.find(".//" + q("a", "xfrm"))
+        if xfrm is None:
+            return 0.0, 0.0
+        ext = xfrm.find(q("a", "ext"))
+        if ext is None:
+            return 0.0, 0.0
+        return (int(ext.get("cx", 0)) / 914400 * 96,
+                int(ext.get("cy", 0)) / 914400 * 96)
+    except Exception:
+        return 0.0, 0.0
+
+
 def iter_pictures(slide_xml: bytes):
-    """独立图片对象 <p:pic> → (shape_name, embed_rid, src_rect, x, y)。"""
+    """独立图片对象 <p:pic> → (shape_name, embed_rid, src_rect, x, y, w, h)。"""
     root = ET.fromstring(slide_xml)
     for pic in root.iter(PIC):
         name = ""
@@ -272,12 +291,13 @@ def iter_pictures(slide_xml: bytes):
             rid = blip.get(q("r", "embed")) or blip.get(q("r", "link"))
         src_rect = parse_src_rect(blip_fill)
         x, y = _xfrm_xy(pic)
-        yield name, rid, src_rect, x, y
+        w, h = _xfrm_wh(pic)
+        yield name, rid, src_rect, x, y, w, h
 
 
 def iter_fill_images(slide_xml: bytes):
     """形状填充图：<p:sp> 内部 <p:spPr><a:blipFill> 且非 <p:pic>。
-    返回 (shape_name, embed_rid, src_rect)。"""
+    返回 (shape_name, embed_rid, src_rect, x, y, w, h)。"""
     root = ET.fromstring(slide_xml)
     for sp in root.iter(SP):
         sp_pr = sp.find(q("p", "spPr"))
@@ -300,7 +320,8 @@ def iter_fill_images(slide_xml: bytes):
             break
         src_rect = parse_src_rect(blip_fill)
         x, y = _xfrm_xy(sp)
-        yield name or "FillShape", rid, src_rect, x, y
+        w, h = _xfrm_wh(sp)
+        yield name or "FillShape", rid, src_rect, x, y, w, h
 
 
 def _bg_blips(xml_bytes: bytes):
@@ -694,24 +715,26 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
             rec_start = len(records)
 
             # 1) 独立图片对象 <p:pic>
-            for idx, (name, rid, src_rect, x, y) in enumerate(
+            for idx, (name, rid, src_rect, x, y, w, h) in enumerate(
                     iter_pictures(slide_xml), start=1):
                 rec = _emit(zf, rels, slide_dir, page_no, idx, "picture",
                             name or f"Picture{idx}", rid, by_page, convert,
                             suffix="pic", src_rect=src_rect if crop else None,
                             min_crop=min_crop)
                 rec.x, rec.y = x, y
+                rec.shape_w, rec.shape_h = w, h
                 records.append(rec)
 
             # 2) 形状填充图 <p:sp><p:spPr><a:blipFill>
             if with_fill:
-                for idx, (name, rid, src_rect, x, y) in enumerate(
+                for idx, (name, rid, src_rect, x, y, w, h) in enumerate(
                         iter_fill_images(slide_xml), start=1):
                     rec = _emit(zf, rels, slide_dir, page_no, idx, "fill",
                                 name, rid, by_page, convert, suffix="fill",
                                 src_rect=src_rect if crop else None,
                                 min_crop=min_crop)
                     rec.x, rec.y = x, y
+                    rec.shape_w, rec.shape_h = w, h
                     records.append(rec)
 
             # 3) 背景图（幻灯片 → 布局 → 母版）
@@ -725,10 +748,18 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
                             src_rect=src_rect if crop else None, min_crop=min_crop)
                 records.append(rec)
 
-            # 4) 公式对象（oleObj → embeddings/oleObjectN.bin）
+            # 4) 公式对象（oleObj → embeddings/oleObjectN.bin；Visio → .vsdx/.vsd）
             for idx, (name, rid, xfrm, prog_id) in enumerate(iter_ole_formulas(slide_xml), start=1):
                 rec = _emit_ole(zf, rels, slide_dir, page_no, idx, name, rid,
                                 xfrm, by_page, render_ctx, prog_id)
+                if xfrm is not None:
+                    try:
+                        rec.x = int(xfrm[0]) / 914400 * 96
+                        rec.y = int(xfrm[1]) / 914400 * 96
+                        rec.shape_w = int(xfrm[2]) / 914400 * 96
+                        rec.shape_h = int(xfrm[3]) / 914400 * 96
+                    except Exception:
+                        pass
                 records.append(rec)
 
             # 5) OMML 公式（<m:oMath>）
@@ -740,6 +771,14 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
             for idx, (name, rid, xfrm) in enumerate(iter_charts(slide_xml), start=1):
                 rec = _emit_chart(zf, rels, slide_dir, page_no, idx, name, rid,
                                   xfrm, by_page, render_ctx)
+                if xfrm is not None:
+                    try:
+                        rec.x = int(xfrm[0]) / 914400 * 96
+                        rec.y = int(xfrm[1]) / 914400 * 96
+                        rec.shape_w = int(xfrm[2]) / 914400 * 96
+                        rec.shape_h = int(xfrm[3]) / 914400 * 96
+                    except Exception:
+                        pass
                 records.append(rec)
 
             # 进度回调（可选，默认 None 不改变任何行为）
@@ -808,7 +847,11 @@ def _emit(zf, rels, base_dir, page_no, idx, kind, name, rid, by_page, convert,
 def _emit_ole(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
               render_ctx, prog_id=""):
     """oleObj → embeddings/oleObjectN.bin。有 LO 整页渲染则裁出 PNG，否则保留 bin。
-    prog_id 用于标注对象类型（如 Equation.DSMT4 = 公式编辑器）。"""
+    prog_id 用于标注对象类型（如 Equation.DSMT4 = 公式编辑器；
+    Visio.Drawing.* = Visio 矢量图，走 _emit_visio 存 .vsdx/.vsd）。"""
+    if "visio" in (prog_id or "").lower():
+        return _emit_visio(zf, rels, slide_dir, page_no, idx, name, rid,
+                           xfrm, by_page, prog_id)
     is_eq = "equation" in (prog_id or "").lower()
     target = resolve_target(slide_dir, rels.get(rid, ""))
     if not target or target not in zf.namelist():
@@ -833,6 +876,39 @@ def _emit_ole(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
     return ImageRecord(page_no, idx, "formula_ole", name, posixpath.basename(target),
                        out.name, 0, 0, "ole", False,
                        note=f"{label}，保留源；建议装 LibreOffice 渲染")
+
+
+def _emit_visio(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
+                prog_id=""):
+    """Visio OLE 对象 → 按容器类型落盘 .vsdx（zip）或 .vsd（OLE 复合文档）。
+
+    识别规则（按文件头魔数）：
+      - b'PK\\x03\\x04'（zip）且含 visio/document.xml → 新版 .vsdx；
+      - b'\\xd0\\xcf\\x11\\xe0'（OLE2 复合文档）→ 旧版 .vsd。
+    二者均为 Visio 原生矢量格式，直接落盘供编辑/二次加工。
+    """
+    target = resolve_target(slide_dir, rels.get(rid, ""))
+    if not target or target not in zf.namelist():
+        return ImageRecord(page_no, idx, "visio", name, target or "(missing)",
+                           "", ole_progid=prog_id, note="Visio 关系缺失")
+    data = zf.read(target)
+    head = data[:4]
+    if head[:2] == b"PK":
+        ext = ".vsdx"
+    elif head == b"\xd0\xcf\x11\xe0":
+        ext = ".vsd"
+    else:
+        ext = ".bin"
+    out = by_page / f"slide_{page_no:02d}_visio_{idx:02d}{ext}"
+    out.write_bytes(data)
+    fmt = "Visio 矢量图(.vsdx)" if ext == ".vsdx" else \
+        ("Visio 矢量图(.vsd)" if ext == ".vsd" else "Visio OLE(容器未知)")
+    return ImageRecord(page_no, idx, "visio", name,
+                       posixpath.basename(target), out.name, 0, 0,
+                       ext.lstrip("."), False,
+                       ole_progid=prog_id,
+                       note=f"{fmt}，直接存原文件；预览图通常以同页 "
+                            "EMF/SVG 图片形式另行提取")
 
 
 def _emit_omath(page_no, idx, omxml, by_page):
@@ -891,7 +967,8 @@ def _write_manifest(out_dir: Path, records: list, n_slides: int, n_vector_skippe
     json_path = out_dir / "manifest.json"
     cols = ["page", "index", "kind", "shape_name", "source_media", "output_file",
             "width", "height", "original_format", "converted_to_png", "note",
-            "src_rect_l", "src_rect_t", "src_rect_r", "src_rect_b", "cropped"]
+            "src_rect_l", "src_rect_t", "src_rect_r", "src_rect_b", "cropped",
+            "x", "y", "shape_w", "shape_h", "ole_progid", "preview_file"]
     with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
         wcsv = csv.writer(f)
         wcsv.writerow(cols)
@@ -900,7 +977,9 @@ def _write_manifest(out_dir: Path, records: list, n_slides: int, n_vector_skippe
             wcsv.writerow([r.page, r.index, r.kind, r.shape_name, r.source_media,
                            r.output_file, r.width, r.height, r.original_format,
                            r.converted_to_png, r.note,
-                           sr[0], sr[1], sr[2], sr[3], r.cropped])
+                           sr[0], sr[1], sr[2], sr[3], r.cropped,
+                           int(r.x), int(r.y), int(r.shape_w), int(r.shape_h),
+                           r.ole_progid, r.preview_file])
     json_path.write_text(json.dumps([asdict(r) for r in records],
                                     ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -910,6 +989,7 @@ def _write_manifest(out_dir: Path, records: list, n_slides: int, n_vector_skippe
     f_ole = [r for r in records if r.kind == "formula_ole"]
     f_om = [r for r in records if r.kind == "formula_omath"]
     charts = [r for r in records if r.kind == "chart"]
+    visios = [r for r in records if r.kind == "visio"]
     cropped = [r for r in records if r.cropped == "yes"]
     # 跨页复用：同一 source_media 被多个记录引用
     media_cnt = Counter(r.source_media for r in records
@@ -918,7 +998,8 @@ def _write_manifest(out_dir: Path, records: list, n_slides: int, n_vector_skippe
 
     print(f"[OK] 处理完成：{n_slides} 页")
     print(f"     独立图片对象 {len(pics)} · 形状填充图 {len(fills)} · 背景图 {len(bgs)}")
-    print(f"     公式 OLE {len(f_ole)} · OMML 公式 {len(f_om)} · 图表 {len(charts)}")
+    print(f"     公式 OLE {len(f_ole)} · OMML 公式 {len(f_om)} · 图表 {len(charts)}"
+          + (f" · Visio 矢量 {len(visios)}" if visios else ""))
     print(f"     其中 已按 srcRect 裁剪 {len(cropped)} 张")
     print(f"     矢量未栅格化 {n_vector_skipped} 张（已保留原文件）")
     print(f"     同媒体被多 shape 引用（跨页复用）{cross} 次")

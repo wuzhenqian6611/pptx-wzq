@@ -158,23 +158,93 @@ def _append_formula_to_md(fm_path: Path, page: int, latex: str) -> None:
     fm_path.write_text(out_text, encoding="utf-8")
 
 
+def _vector_convert_one(src: Path, out_path: Path, tool) -> bool:
+    """把矢量文件转为目标格式（soffice 或 inkscape）。返回是否成功。"""
+    try:
+        import subprocess as _sp
+        if tool[0] == "soffice":
+            r = _sp.run([tool[1], "--headless", "--convert-to",
+                         out_path.suffix.lstrip("."),
+                         "--outdir", str(out_path.parent), str(src)],
+                        capture_output=True, timeout=180)
+            if r.returncode != 0:
+                return False
+            produced = out_path.parent / (src.stem + out_path.suffix)
+            if produced.is_file():
+                if produced != out_path:
+                    produced.replace(out_path)
+                return True
+            return False
+        if tool[0] == "inkscape":
+            r = _sp.run([tool[1], str(src), "--export-type=" +
+                         out_path.suffix.lstrip("."),
+                         "--export-filename=" + str(out_path)],
+                        capture_output=True, timeout=180)
+            return r.returncode == 0 and out_path.is_file()
+    except Exception:
+        pass
+    return False
+
+
+def _normalize_vectors(records, by_page: Path, args) -> dict:
+    """需求2：保留的矢量图（emf/wmf/svg）规范化为 svg（--vector-out svg，默认）
+    或 wmf（--vector-out wmf）。转换失败回退保留原格式文件。
+    公式版 WMF（位图封装）不在此处理（走渲染+OCR 链路）；
+    visio（vsdx/vsd）按需求1 直接存原文件，也不在此处理。
+    返回 {"converted": n, "kept": n}。
+    """
+    want = getattr(args, "vector_out", "svg")
+    tool = None
+    try:
+        tool = E._detect_rasterizer(getattr(args, "raster_prefer", "auto"))
+    except Exception:
+        tool = None
+    if tool is None:
+        print("[矢量] 未检测到 LibreOffice/Inkscape，矢量图保留原格式文件",
+              file=sys.stderr)
+        return {"converted": 0, "kept": 0}
+    n_conv = 0
+    for rec in list(records):
+        if rec.original_format not in E.VECTOR or not rec.output_file:
+            continue
+        if rec.kind in ("visio", "formula_ole"):
+            continue
+        if rec.output_file.lower().endswith("." + want):
+            continue
+        src = by_page / rec.output_file
+        if not src.is_file():
+            continue
+        dst = src.with_suffix("." + want)
+        if _vector_convert_one(src, dst, tool) and dst.is_file():
+            rec.output_file = dst.name
+            rec.note = (rec.note + "；" if rec.note else "") + \
+                f"由 {rec.original_format} 规范化为 {want}"
+            try:
+                src.unlink()
+            except OSError:
+                pass
+            n_conv += 1
+            print(f"[矢量] {src.name} → {dst.name}", file=sys.stderr)
+    return {"converted": n_conv, "kept": len(records) - n_conv}
+
+
 def _process_vectors(records, by_page: Path, out: Path, stem: str,
                      filtered: list, args) -> dict:
     """方案B后处理（过滤后、gallery 前调用）：
 
     1) 位图封装 WMF（公式版，已在过滤中弃用）→ PowerPoint 渲染 PNG →
        视觉识别 LaTeX → 追加进 formulas.md 对应页；
-    2) 曲线型 WMF（保留的真矢量图）→ PowerPoint 渲染 PNG →
-       替换记录 output_file 为 PNG（images/ 最终收录 PNG）。
-    返回 {"formulas": n, "rendered": n}。
+    2) 保留的真矢量图（emf/wmf/svg）→ 规范化为 svg/wmf（--vector-out，
+       LibreOffice/Inkscape），失败保留原文件（不再默认栅格化 PNG）。
+    返回 {"formulas": n, "rendered": n, "normalized": n}。
     """
     engine = getattr(args, "render_engine", "auto")
     if engine == "off":
-        return {"formulas": 0, "rendered": 0}
+        return {"formulas": 0, "rendered": 0, "normalized": 0}
     if engine == "auto" and not pptrender.check_available():
         print("[渲染] PowerPoint 不可用，跳过矢量渲染（可用 --render-engine off）",
               file=sys.stderr)
-        return {"formulas": 0, "rendered": 0}
+        return {"formulas": 0, "rendered": 0, "normalized": 0}
 
     # 1) 公式版 WMF（filtered 中 reason 含"位图封装"；源文件已被移到 discarded/）
     formula_jobs = []
@@ -187,24 +257,9 @@ def _process_vectors(records, by_page: Path, out: Path, stem: str,
             if src.exists():
                 png = by_page / (Path(f["file"]).stem + "_fm.png")
                 formula_jobs.append((src, png, 4))
-    # 2) 曲线型 WMF（保留 records 中的 wmf）
-    render_jobs = []
-    keep_png = {}
-    for rec in records:
-        if rec.kind != "picture" or not (rec.output_file or "").endswith(".wmf"):
-            continue
-        src = by_page / rec.output_file
-        if not src.exists():
-            continue
-        if img_filter._wmf_bitmap_wrapper(src):
-            continue                      # 位图封装已在过滤中弃用
-        png = by_page / (Path(rec.output_file).stem + "_vec.png")
-        render_jobs.append((src, png, 4))
-        keep_png[rec.output_file] = png.name
 
-    n_rendered = pptrender.render_wmfs(formula_jobs + render_jobs,
-                                       quiet=False)
-    # 3) 公式识别并追加
+    n_rendered = pptrender.render_wmfs(formula_jobs, quiet=False)
+    # 2) 公式识别并追加
     n_formulas = 0
     fm_path = Path(args.append_formulas) if args.append_formulas else \
         out / f"{stem}_formulas.md"
@@ -218,19 +273,10 @@ def _process_vectors(records, by_page: Path, out: Path, stem: str,
             n_formulas += 1
             print(f"[公式] 第 {page} 页 图片公式识别: {latex[:40]}…",
                   file=sys.stderr)
-    # 4) 曲线 WMF 的 record 指向 PNG（gallery 收录 PNG）
-    for old, new in keep_png.items():
-        for rec in records:
-            if rec.output_file == old:
-                rec.output_file = new
-                try:
-                    from PIL import Image
-                    with Image.open(by_page / new) as im:
-                        rec.width, rec.height = im.size
-                except Exception:
-                    pass
-                break
-    return {"formulas": n_formulas, "rendered": n_rendered}
+    # 3) 保留矢量图规范化（需求2：svg 优先，wmf 兜底）
+    norm = _normalize_vectors(records, by_page, args)
+    return {"formulas": n_formulas, "rendered": n_rendered,
+            "normalized": norm["converted"]}
 
 
 def _clean_output(out: Path) -> None:
@@ -358,6 +404,11 @@ def main(argv=None) -> int:
                     choices=["auto", "ppt", "off"],
                     help="矢量图渲染引擎：auto=探测 PowerPoint，ppt=强制 "
                          "PowerPoint，off=关闭渲染（默认 auto）")
+    ap.add_argument("--vector-out", default="svg",
+                    choices=["svg", "wmf"],
+                    help="保留矢量图的规范化目标格式：svg=转 SVG（默认，"
+                         "LibreOffice/Inkscape），wmf=转 WMF；转换失败回退"
+                         "保留原格式文件")
     ap.add_argument("--ocr-engine", default="pix2tex",
                     choices=["qwen", "pix2tex", "skip"],
                     help="图片公式识别引擎：pix2tex=本地 latexocr（默认，零费用），"
@@ -426,8 +477,8 @@ def main(argv=None) -> int:
                         on_progress=filter_cb)
                     records = kept
                 # 方案B：矢量图 PowerPoint 渲染（公式版→LaTeX 追加 formulas；
-                # 曲线版→PNG 供 images 收录）
-                vec_extra = {"formulas": 0, "rendered": 0}
+                # 保留矢量→规范化 svg/wmf）
+                vec_extra = {"formulas": 0, "rendered": 0, "normalized": 0}
                 if not args.no_filter:
                     vec_extra = _process_vectors(
                         records, by_page, Path(out), Path(pptx_norm).stem,
@@ -444,6 +495,7 @@ def main(argv=None) -> int:
             stat["images"] = n_images
             stat["vec_formulas"] = vec_extra["formulas"]
             stat["vec_rendered"] = vec_extra["rendered"]
+            stat["vec_normalized"] = vec_extra["normalized"]
             stat["images_md"] = images_md
             print_json(stat)
         else:
@@ -479,7 +531,7 @@ def main(argv=None) -> int:
                 print(f"     明细：{Path(out) / 'filter_report.json'}")
                 records = kept
                 # 方案B：矢量图 PowerPoint 渲染（公式版→LaTeX 追加 formulas；
-                # 曲线版→PNG 供 images 收录）
+                # 保留矢量→规范化 svg/wmf）
                 vec_extra = _process_vectors(
                     records, by_page, Path(out), Path(pptx_norm).stem,
                     filtered, args)
@@ -488,6 +540,9 @@ def main(argv=None) -> int:
                           f"已追加到 formulas.md")
                 if vec_extra["rendered"]:
                     print(f"[OK] 矢量渲染：{vec_extra['rendered']} 张 → PNG")
+                if vec_extra["normalized"]:
+                    print(f"[OK] 矢量规范化：{vec_extra['normalized']} 张 "
+                          f"→ {args.vector_out}")
             if not args.no_gallery:
                 n_images, images_md = img_filter.build_image_gallery(
                     records, Path(out) / "by_page", Path(out),

@@ -279,6 +279,18 @@ def _append_footer(out_path: Path, n: int, done: int, failed: int,
             f.write(f"- {note}\n")
 
 
+def _existing_entries(out_path: Path) -> set:
+    """解析已有 captions.md 的条目文件名集合（--resume 续跑用）。"""
+    done = set()
+    if not out_path.exists():
+        return done
+    for ln in out_path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^###\s+IMG\d+\s*—\s*`?([^`\s]+\.\w+)\s*`?", ln)
+        if m:
+            done.add(m.group(1))
+    return done
+
+
 def caption_dir(images_dir: Path, out_path: Path,
                 model: str = DEFAULT_MODEL,
                 base_url: str = DEFAULT_BASE_URL,
@@ -288,12 +300,15 @@ def caption_dir(images_dir: Path, out_path: Path,
                 flush_interval: float = 60.0,
                 texts_path: Path = None, formulas_path: Path = None,
                 subject: str = None,
+                resume: bool = False,
                 on_progress=None):
     """逐张解读 images_dir 下栅格图，写 captions.md。
 
     texts_path/formulas_path：文档上下文模式——学科（subject 或由
     texts 前 3-5 页让模型生成）填入提示词括号，每张图附带该页文本/
     公式上下文（从文件名 slide_NN 取页码）。不提供时用通用视觉提示词。
+    resume=True：解析已有 captions.md 条目，跳过已完成图片（断点续跑，
+    不重写文件头，只追加新条目）。
     其他特性：屏幕打印、增量落盘、矢量跳过、失败重试。
     返回统计 dict。
     """
@@ -308,6 +323,15 @@ def caption_dir(images_dir: Path, out_path: Path,
         if p.suffix.lower() in RASTER_EXTS)
     vectors = sorted(p for p in images_dir.iterdir()
                      if p.suffix.lower() in VECTOR_EXTS)
+    resumed = 0
+    if resume and out_path.exists():
+        done_files = _existing_entries(out_path)
+        todo = [p for p in images if p.name not in done_files]
+        resumed = len(images) - len(todo)
+        if resumed:
+            print(f"[续跑] 已解读 {resumed} 张（{out_path.name}），"
+                  f"继续剩余 {len(todo)} 张", file=sys.stderr)
+        images = todo
     n = len(images)
 
     # 文档上下文模式：先判断学科（texts 前 3-5 页 → 模型），再逐图带页上下文
@@ -320,9 +344,12 @@ def caption_dir(images_dir: Path, out_path: Path,
     else:
         subject = ""
 
-    _write_header(out_path, images_dir.parent.name or "images",
-                  model, n, len(vectors))
-    print(f"[落盘] 已创建 {out_path.name}（共 {n} 张）", file=sys.stderr)
+    if not (resume and out_path.exists()):
+        _write_header(out_path, images_dir.parent.name or "images",
+                      model, n, len(vectors))
+        print(f"[落盘] 已创建 {out_path.name}（共 {n} 张）", file=sys.stderr)
+    else:
+        print(f"[落盘] 续跑模式：追加写入 {out_path.name}", file=sys.stderr)
 
     done, failed = 0, 0
     pending = []                     # 本分钟待落盘条目
@@ -403,9 +430,12 @@ def caption_dir(images_dir: Path, out_path: Path,
             time.sleep(sleep)
 
     _flush("完成")
-    _append_footer(out_path, n, done, failed, model, base_url, vectors)
+    _append_footer(out_path, n + resumed, done, failed, model, base_url,
+                   vectors,
+                   note=f"（本次续跑 {resumed} 张已完成，新处理 {n} 张）"
+                        if resumed else "")
     return {"total": n, "done": done, "failed": failed,
-            "vectors": len(vectors), "model": model, "md": str(out_path)}
+            "resumed": resumed, "model": model, "md": str(out_path)}
 
 
 def _main(argv=None) -> int:
@@ -432,6 +462,9 @@ def _main(argv=None) -> int:
                          "写入 md（默认 60；中途中断不丢已解读结果）")
     ap.add_argument("--stop-on-error", action="store_true",
                     help="单张失败即中断（默认跳过继续）")
+    ap.add_argument("--resume", action="store_true",
+                    help="断点续跑：解析已有 captions.md 条目，跳过已完成"
+                         "图片，只解读剩余（不重写文件头）")
     ap.add_argument("--texts", type=Path, default=None,
                     help="文本文档 md（提供后启用「先理解文档」模式："
                          "学科由 texts 前 3-5 页让模型生成，每图附带该页"
@@ -466,6 +499,7 @@ def _main(argv=None) -> int:
                                      texts_path=args.texts,
                                      formulas_path=args.formulas,
                                      subject=args.subject,
+                                     resume=args.resume,
                                      on_progress=cb)
             print_json(result)
         else:
@@ -479,10 +513,13 @@ def _main(argv=None) -> int:
                                  texts_path=args.texts,
                                  formulas_path=args.formulas,
                                  subject=args.subject,
+                                 resume=args.resume,
                                  on_progress=cb)
             print(f"[OK] AI 解读完成：{out_path}")
             print(f"     成功 {result['done']} / 共 {result['total']} 张"
-                  f"{'（失败 ' + str(result['failed']) + '）' if result['failed'] else ''}")
+                  f"{'（失败 ' + str(result['failed']) + '）' if result['failed'] else ''}"
+                  + (f"（续跑 {result['resumed']} 张已完成）"
+                     if result.get("resumed") else ""))
         return EXIT_OK
     except Exception as e:
         print(f"[错误] 解读失败：{e}", file=sys.stderr)
