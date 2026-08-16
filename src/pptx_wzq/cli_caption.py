@@ -88,7 +88,7 @@ def _md_page_text(path: Path, page: int) -> str:
         return ""
     cur, buf = None, []
     for ln in path.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^##\s*第\s*(\d+)\s*页\s*$", ln.strip())
+        m = re.match(r"^##\s*第\s*(\d+)\s*(?:页|节)\s*$", ln.strip())
         if m:
             cur = int(m.group(1))
             buf = []
@@ -106,7 +106,7 @@ def _infer_subject(client, texts_path: Path, model: str,
         pages = {}
         cur = None
         for ln in texts_path.read_text(encoding="utf-8").splitlines():
-            m = _re.match(r"^##\s*第\s*(\d+)\s*页\s*$", ln.strip())
+            m = _re.match(r"^##\s*第\s*(\d+)\s*(?:页|节)\s*$", ln.strip())
             if m:
                 cur = int(m.group(1))
                 pages.setdefault(cur, [])

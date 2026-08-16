@@ -368,7 +368,7 @@ def _missing_author_pages(work: Path, stem: str) -> str | None:
     def pages_of(path: Path) -> set:
         out = set()
         for ln in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^##\s*第\s*(\d+)\s*页\s*$", ln.strip())
+            m = re.match(r"^##\s*第\s*(\d+)\s*(?:页|节)\s*$", ln.strip())
             if m:
                 out.add(int(m.group(1)))
         return out

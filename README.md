@@ -93,10 +93,11 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 ├─ images/              教学图片集（PNG + SVG/WMF 矢量 + vsdx/vsd 归档）
 ├─ <名>_captions.md     图片理解（已剔除 logo/作者/单位等无关图）
 ├─ <名>_textbook.md     教材文案（每页一节；原文超 300 字页直接提取）
-├─ <名>_binding.json    图文绑定 v3（按页 {page, text, images[{file, caption,
-│                       source, kind, image_id, page, paragraph, text_id,
-│                       w/h/x/y 坐标, position(图片作用, LLM), relation
-│                       (图文逻辑关系, LLM)}]}；无图文本段不进入绑定）
+├─ <名>_binding.json    图文绑定 v3.1（按页 {page, text, images[{file, caption,
+│                       source, kind(格式直出), image_id, page, paragraph,
+│                       text_id, w/h/x/y 坐标, position(确定性位置+LLM角色
+│                       ≤40字), relation(图文逻辑关系, LLM, ≤50字)}]}；
+│                       无图文本段不进入绑定；解析兼容 页/节）
 ├─ <名>_related_filter.json  图文相关性过滤审计（被删图 + 原因）
 ├─ state.json           断点续传状态机（步骤 status：pending/running/
 │                       partial/done/failed）

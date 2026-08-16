@@ -89,11 +89,11 @@ def _infer_subject(text: str) -> str:
 # 三个 md 的解析（统一输出 {page: [条目文本]}）
 # --------------------------------------------------------------------------
 def _split_pages(content: str):
-    """按 '## 第 N 页' 分块，返回 {page: 块内容}。"""
+    """按 '## 第 N 页/节' 分块（页/节双兼容，可互读 word 产物），返回 {page: 块内容}。"""
     pages = {}
     cur = None
     for line in content.splitlines():
-        m = re.match(r"^##\s*第\s*(\d+)\s*页\s*$", line.strip())
+        m = re.match(r"^##\s*第\s*(\d+)\s*(?:页|节)\s*$", line.strip())
         if m:
             cur = int(m.group(1))
             pages.setdefault(cur, [])
@@ -446,8 +446,7 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                 continue
             f.write(f"## 第 {p} 页\n\n{content}\n\n")
             if p in direct:
-                f.write(f"> 本页原文已超过 {no_expand_threshold} 字，"
-                        "直接提取，未作扩写。\n\n")
+                f.write(f"> 原文直出（超过 {no_expand_threshold} 字，未扩写）。\n\n")
         f.write("---\n\n"
                 f"共 {len(target)} 页（{len(direct)} 页直出 + {len(model_target)} 页模型，"
                 f"{n_batches} 批），学科：{subject}。\n")
