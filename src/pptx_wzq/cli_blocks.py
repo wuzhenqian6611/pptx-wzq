@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -169,6 +170,37 @@ def _locate(args) -> tuple:
     atomic = args.atomic_objects
     if atomic is None:
         atomic = VB.load_atomic_objects(out_dir) or None
+        if atomic is None:
+            # 自举：用原始 pptx 准备原子对象（几何 + 矢量源）
+            pptx_for_prep = (args.pptx
+                             if (args.pptx and Path(args.pptx).is_file())
+                             else None)
+            if pptx_for_prep:
+                try:
+                    from pptx_wzq import extract_pptx_images as E
+                    atomic = E.prepare_block_inputs(
+                        str(pptx_for_prep), str(out_dir))
+                except Exception as e:
+                    print(f"[警告] 自动准备原子对象失败：{e}",
+                          file=sys.stderr)
+                    atomic = None
+            else:
+                atomic = None
+    elif isinstance(atomic, (str, os.PathLike)):
+        # 显式 --atomic-objects 传的是文件路径：加载为对象列表
+        # （extract_blocks 需要 list[dict]，不能直接传 Path）
+        _p = Path(atomic)
+        if _p.is_file():
+            try:
+                atomic = json.loads(_p.read_text(encoding="utf-8"))
+            except Exception:
+                print(f"[警告] atomic_objects 解析失败：{_p}，"
+                      f"使用规则聚类", file=sys.stderr)
+                atomic = None
+        else:
+            print(f"[警告] atomic_objects 不存在：{_p}",
+                  file=sys.stderr)
+            atomic = None
     texts = args.texts
     if texts is None:
         cands = sorted(out_dir.glob("*_texts.md")) + \
@@ -180,6 +212,76 @@ def _locate(args) -> tuple:
             sorted(out_dir.rglob("*_formulas.md"))
         formulas = cands[0] if cands else None
     return atomic, texts, formulas
+
+
+def _export_block_resources_and_binding(out_slides: list,
+                                         atomic_objects: list,
+                                         by_page_dir: Path,
+                                         sources_dir: Path,
+                                         binding_path: Path,
+                                         stem: str) -> tuple:
+    """把每个块内的矢量/Visio 源文件复制到 sources/（按 block_id 命名），
+    并把块↔文本跨模态关系写成独立的 visualBlock_text_binding.json。
+
+    返回 (n_sources, n_bindings)。"""
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    n_sources = 0
+    bindings = []
+    for s in out_slides:
+        page = (s.get("slide_info") or {}).get("slide_index", s.get("page", 0))
+        for blk in s.get("visual_blocks", []):
+            blk_id = blk.get("block_id", "")
+            # 1) 矢量/Visio 源 → sources/（以 block_id 命名，避免冲突）
+            vec = blk.get("vector_resources") or []
+            copied = []
+            for res in vec:
+                src = by_page_dir / res
+                if not src.is_file():
+                    continue
+                ext = Path(res).suffix.lower()
+                dst = sources_dir / f"slide_{page:02d}_{blk_id}{ext}"
+                try:
+                    shutil.copy2(str(src), str(dst))
+                    copied.append(dst.name)
+                    n_sources += 1
+                except OSError as e:
+                    print(f"[警告] 复制块矢量源失败 {res}：{e}",
+                          file=sys.stderr)
+            if copied:
+                blk.setdefault("assets", {})
+                blk["assets"]["vector_svg"] = f"./sources/{copied[0]}"
+                blk["assets"]["block_resources"] = \
+                    [f"./sources/{c}" for c in copied]
+            # 2) 块↔文本关系（来自本页 cross_modal_relations）
+            for rel in s.get("cross_modal_relations", []):
+                if rel.get("target_block_id") != blk_id:
+                    continue
+                bindings.append({
+                    "relation_id": rel.get("relation_id", ""),
+                    "page": page,
+                    "target_block_id": blk_id,
+                    "block_type": blk.get("block_type", ""),
+                    "text_anchor": rel.get("text_anchor", ""),
+                    "relation_type": rel.get("relation_type", "elaboration"),
+                    "semantic_link": rel.get("semantic_link", ""),
+                })
+    binding = {
+        "$schema": "pptx_visual_block_text_binding_v1.0",
+        "stem": stem or "",
+        "tool_version": "pptx-wzq " + __import__("pptx_wzq").__version__,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "summary": {
+            "slides": len(out_slides),
+            "blocks_total": sum(len(s.get("visual_blocks", []))
+                               for s in out_slides),
+            "bindings_total": len(bindings),
+            "sources_total": n_sources,
+        },
+        "bindings": bindings,
+    }
+    binding_path.write_text(json.dumps(binding, ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+    return n_sources, len(bindings)
 
 
 def _main(argv=None) -> int:
@@ -356,6 +458,17 @@ def _main(argv=None) -> int:
         "semantics_enriched": n_enriched,
         "relations_enriched": n_rels,
     }
+    # 交付物：块矢量资源 → sources/；块↔文本关系 → visualBlock_text_binding.json
+    # （仅在最终组装步骤 --semantic-model 时生成；clustering 预跑不产出）
+    if args.semantic_model:
+        by_page_dir = out_dir / "by_page"
+        binding_path = out_dir / f"{stem or 'slide'}_visualBlock_text_binding.json"
+        n_src, n_bnd = _export_block_resources_and_binding(
+            out_slides, atomic, by_page_dir, out_dir / "sources",
+            binding_path, stem)
+        print(f"[交付] 块矢量资源 {n_src} 个 → sources/；"
+              f"块↔文本关系 {n_bnd} 条 → {binding_path.name}", file=sys.stderr)
+
     binding = {
         "$schema": "pptx_multimodal_slide_v2.0",
         "stem": stem or out_dir.name,

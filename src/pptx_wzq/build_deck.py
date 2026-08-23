@@ -289,7 +289,7 @@ def _compose(P, D, slides, A):
     A('''<article class="slide">
       <div class="closing">
         <div class="q">从"放大信号"到"驱动负载"——<br/>功率、效率与不失真，<b>一场工程性的权衡。</b></div>
-        <div class="sub">第九章 功率放大电路 · 由 PPT-Paser 教材流水线生成</div>
+        <div class="sub">第九章 功率放大电路 · 由 pptx-wzq 教材流水线生成</div>
       </div>
     </article>''')
 

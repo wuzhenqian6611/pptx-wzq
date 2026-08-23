@@ -33,7 +33,6 @@ ocr = ["pix2tex>=0.1.2"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-pptx-img = "pptx_wzq.cli_img:main"
 pptx-formula = "pptx_wzq.cli_formula:main"
 pptx-text = "pptx_wzq.cli_text:main"
 pptx-caption = "pptx_wzq.cli_caption:main"

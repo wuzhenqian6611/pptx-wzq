@@ -1094,6 +1094,28 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
     return records, atomic_objects
 
 
+def prepare_block_inputs(pptx_path: str, out_dir: str,
+                         rasterize: bool = False) -> list:
+    """为「可视逻辑块」步骤准备输入：只做原子对象采集 + 矢量/Visio 源提取，
+    不再把单张图片当作交付物输出（旧的「单图提取」已并入可视逻辑块）。
+
+    - 写出 <out_dir>/atomic_objects.json（blocks 步骤空间聚类的几何地基）；
+    - 写出 <out_dir>/by_page/（含 Visio/矢量源文件，供后续复制到 sources/）；
+    - 不产出 images/、不写 images_meta.json；
+    - rasterize=False：不调用 LibreOffice 栅格化矢量（块渲染图由 blocks 步骤
+      用整页渲染裁剪得到，源文件保持矢量即可）。
+
+    返回 atomic_objects（list[dict]）。"""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _, atomic = extract(
+        pptx_path, str(out_dir),
+        convert=True, all_media=False, with_fill=True,
+        with_bg_layout=True, rasterize=rasterize, crop=False,
+        with_atomic=True, on_progress=None)
+    return atomic
+
+
 def _emit(zf, rels, base_dir, page_no, idx, kind, name, rid, by_page, convert,
           suffix="pic", src_rect=None, min_crop=64):
     """解析单个关系并落盘，返回 ImageRecord。rels/base_dir 指向【媒体所在】层级。"""

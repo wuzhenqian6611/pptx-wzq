@@ -166,6 +166,7 @@ class VisualBlock:
     member_obj_ids: list = field(default_factory=list)
     page: int = 0
     is_single: bool = False
+    vector_resources: list = field(default_factory=list)  # 块内矢量/Visio 成员
     text_density: float = 0.0   # 文字空间密度：块内文本字符数 / 块面积(px²)
                                 # 高密度=文本区，低密度=逻辑图/图（判据）
 
@@ -756,6 +757,8 @@ def describe_block(client, model: str, block: VisualBlock,
             messages=[{"role": "system", "content": DESCRIBE_SYSTEM},
                       {"role": "user", "content": content}],
             stream=False,
+            max_tokens=600,          # 限制输出长度：thinking 模式长思考会拖慢响应
+            timeout=60,              # 单次调用超时保护，失败回退规则模板
             reasoning_effort="high",
             extra_body={"thinking": {"type": "enabled"}},
         )
@@ -879,6 +882,8 @@ def enrich_semantics(client, model: str, slides: list, page_texts: dict,
                     messages=[{"role": "system", "content": SEMANTIC_SYSTEM},
                               {"role": "user", "content": prompt}],
                     stream=False,
+                    max_tokens=600,
+                    timeout=60,
                     reasoning_effort="high",
                     extra_body={"thinking": {"type": "enabled"}},
                 )
@@ -982,6 +987,8 @@ def enrich_relations(client, model: str, slides: list, page_texts: dict,
                         {"role": "system", "content": RELATION_ENRICH_SYSTEM},
                         {"role": "user", "content": prompt}],
                     stream=False,
+                    max_tokens=300,
+                    timeout=60,
                     reasoning_effort="high",
                     extra_body={"thinking": {"type": "enabled"}},
                 )
@@ -1027,6 +1034,8 @@ def build_cross_modal_relations(blocks: list[VisualBlock],
                                f"目标：{(blk.semantic_description or {}).get('expression_goal', '')}"
                                f"；描述：{(blk.semantic_description or {}).get('vlm_caption', '')[:200]}"}],
                     stream=False,
+                    max_tokens=300,
+                    timeout=60,
                     reasoning_effort="high",
                     extra_body={"thinking": {"type": "enabled"}},
                 )
@@ -1078,9 +1087,20 @@ def extract_blocks(pptx_path: str, out_dir: str,
         ao_path = Path(out_dir) / "atomic_objects.json"
         if ao_path.is_file():
             atomic_objects = json.loads(ao_path.read_text(encoding="utf-8"))
-        else:
+        elif pptx_path:
+            # 自举：调用 extract_pptx_images 准备原子对象（几何 + 矢量源）
+            try:
+                from pptx_wzq import extract_pptx_images as _E
+                _E.prepare_block_inputs(str(pptx_path), str(out_dir))
+                if ao_path.is_file():
+                    atomic_objects = json.loads(
+                        ao_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[警告] 自动准备原子对象失败：{e}", file=sys.stderr)
+        if not atomic_objects:
             return []
     atomic = [AtomicObject.from_dict(d) for d in atomic_objects]
+    ao_map = {o.obj_id: o for o in atomic}
     page_texts = page_texts or {}
     cfg = {**CLUSTER_CONFIG, **(config or {})}
     # 硬编码修复：用真实页面尺寸（sldSz）覆盖 960×720 参考值——
@@ -1195,6 +1215,19 @@ def extract_blocks(pptx_path: str, out_dir: str,
             _chars = sum(len((o.text or "").strip())
                          for o in cl if o.kind in ("shape", "connector"))
             block.text_density = round(_chars / _area * 1_000_000, 3)
+            # 块矢量/Visio 资源：成员中属于矢量/Visio 的对象 output_file
+            # （供 cli_blocks 复制到 sources/，作为可视逻辑区的可编辑资源）
+            _vec = []
+            for _mid in (o.obj_id for o in cl):
+                _ao = ao_map.get(_mid)
+                if _ao is None:
+                    continue
+                _fmt = (_ao.original_format or "").lower()
+                _of = _ao.output_file or ""
+                if _of and _fmt in ("vsdx", "vsd", "svg", "wmf", "emf"):
+                    if _of not in _vec:
+                        _vec.append(_of)
+            block.vector_resources = _vec
             blocks.append(block)
 
         # VLM 增强（可选）

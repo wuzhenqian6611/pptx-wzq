@@ -1,33 +1,32 @@
-"""cli_paser.py — PPT-Paser 整体编排指令。
+"""cli_paser.py — pptx-wzq 整体编排指令。
 
-把一份 PPT 依次跑完：文本提取 → 公式提取 → 图片提取（含原子对象）→
-可视逻辑块解析（合并图片 AI 解读）→ 相关性过滤 → 教材文案生成 →
-可视逻辑块 JSON 组装，并整理产物。
+把一份 PPT 依次跑完：文本提取 → 公式提取 → 可视逻辑块解析（合并图片 AI 解读）→
+相关性过滤 → 教材文案生成 → 可视逻辑块 JSON 组装，并整理产物。
 
 用法：
-    PPT-Paser XXX.pptx -o 生成结果目录
-    PPT-Paser XXX.pptx -o 结果目录 [--author-pages "1,4"] [--skip blocks]
-      --skip 可逗号分隔跳过步骤：text,formula,img,blocks,related,author,blocks_json
+    pptx-paser XXX.pptx -o 生成结果目录
+    pptx-paser XXX.pptx -o 结果目录 [--author-pages "1,4"] [--skip blocks]
+      --skip 可逗号分隔跳过步骤：text,formula,blocks,related,author,blocks_json
 
 流程（含交互确认）：
     1) 环境检查：逐项组件检查并显示结果；
     2) KEY 检查：两个 API Key 缺失时打印注册引导（网页/用途/资费），
        交互输入 Key 并用 setx 注册，提示重启后重跑；
     3) 执行计划：分步说明每步做什么 + Token 消耗估算 → 询问用户是否继续；
-    4) 依次执行七步（text/formula 提前为 blocks 的 Semantic Captioning
+    4) 依次执行六步（text/formula 提前为 blocks 的 Semantic Captioning
        提供上下文；blocks 合并原 caption 职责）；
     5) 产物归位 + 执行结果汇总 + 结果文档使用说明。
 
-产物组织：
-    生成结果目录/
-      ├─ images/                    ← 可视逻辑块渲染图 + 原子图（统一图片集）
-      ├─ sources/                   ← 矢量源（vsdx/svg/wmf/emf）
-      ├─ <名>_captions.md           ← 可视逻辑块级 AI 解读（Semantic Captioning）
-      ├─ <名>_textbook.md           ← 教材文案
-      ├─ <名>_visual_blocks.json    ← 可视逻辑块全栈解析（替换原 binding.json）
-      ├─ images_meta.json           ← 图片元数据
-      过程文件/                     ← 其余全部（by_page/manifest/
-                                      texts.md/formulas.md/atomic_objects/…）
+    产物组织：
+        生成结果目录/
+          ├─ images/                    ← 可视逻辑块渲染图（统一图片集）
+          ├─ sources/                   ← 可视逻辑区的矢量/Visio 资源（vsdx/svg/wmf/emf）
+          ├─ <名>_visualBlock_text_binding.json ← 可视逻辑区↔文本 图文关联
+          ├─ <名>_captions.md           ← 可视逻辑块级 AI 解读（Semantic Captioning）
+          ├─ <名>_textbook.md           ← 教材文案
+          ├─ <名>_visual_blocks.json    ← 可视逻辑块全栈解析（替换原 binding.json）
+          过程文件/                     ← 其余全部（by_page/manifest/
+                                         texts.md/formulas.md/atomic_objects/…）
 
 执行前环境检查：
     1) 各子指令依赖：openai / Pillow / ultralytics+yolov5su.pt /
@@ -52,13 +51,14 @@ import time
 from pathlib import Path
 
 from pptx_wzq.cli_common import banner, banner_end
+from pptx_wzq import __version__ as _PKG_VERSION
 
-VERSION = "PPT-Paser 4.0.0 (可视逻辑块全栈解析 + Semantic Captioning 合并)"
+VERSION = f"pptx-wzq {_PKG_VERSION} (可视逻辑块全栈解析 + Semantic Captioning 合并)"
 PROC_DIR = "过程文件"
 
 # 步骤顺序（新流程：text/formula 提前为 blocks 提供上下文；
 # blocks 合并原 caption；blocks_json 组装最终 JSON）
-STEPS = ["text", "formula", "img", "blocks", "related", "author", "blocks_json"]
+STEPS = ["text", "formula", "blocks", "related", "author", "blocks_json"]
 
 
 # --------------------------------------------------------------------------
@@ -123,10 +123,7 @@ def _artifact_ok(out: Path, stem: str, step: str) -> bool:
     proc = out / PROC_DIR
     work = out / "_proc"
     cands = []
-    if step == "img":
-        cands = [out / "images", proc / "img" / "images",
-                 work / "img" / "images"]
-    elif step == "formula":
+    if step == "formula":
         cands = [proc / "formula", work / "formula"]
     elif step == "text":
         cands = [proc / "text", work / "text"]
@@ -323,7 +320,7 @@ def _ensure_keys() -> bool:
         return False
     print("\n[KEY] 两个 Key 已全部注册完成。", file=sys.stderr)
     print("[重要] 环境变量要**重启系统（或至少重开命令窗口）**后才生效；", file=sys.stderr)
-    print("[重要] 请重启后重新运行：PPT-Paser <ppt> -o <结果目录>",
+    print("[重要] 请重启后重新运行：pptx-paser <ppt> -o <结果目录>",
           file=sys.stderr)
     return False
 
@@ -389,7 +386,7 @@ def _missing_author_pages(work: Path, stem: str) -> str | None:
 
 def _exec_step(step: str, args, work: Path, stem: str,
                action: str) -> None:
-    """执行单个步骤（text/formula/img/blocks/related/author/blocks_json）。
+    """执行单个步骤（text/formula/blocks/related/author/blocks_json）。
     action: run | resume（resume 透传给子命令的续跑参数）。"""
     pptx = Path(args.pptx)
     total = len(STEPS)
@@ -414,26 +411,17 @@ def _exec_step(step: str, args, work: Path, stem: str,
             resource="本地计算（0 Token）· 依赖 omml2latex / olefile / "
                      "mtef_decoder；OCR 可选",
             outs=[work / "formula"], idx=idx, total=total)
-    elif step == "img":
-        _run_step(
-            "图片提取+过滤+图片集（vsdx 直接存 .vsdx，矢量规范化 svg/wmf）",
-            "cli_img",
-            [pptx, "-o", work / "img"], ".",
-            desc="解析 PPT 全部图片类对象（<p:pic> 图片 / 形状填充 / 页面背景 / "
-                 "OLE 公式 / 图表 / Visio 嵌入对象）+ 原生 shape/connector/表格"
-                 "（原子对象）→ 三路过滤 → Visio OLE 按容器存 .vsdx/.vsd、"
-                 "emf/wmf/svg 规范化 svg（失败回退 wmf）→ 位图封装 WMF 渲染+OCR "
-                 "→ 教学图片集 + atomic_objects.json",
-            resource="本地计算（0 Token）· 依赖 Pillow / ultralytics / "
-                     "PowerPoint / LibreOffice(可选)",
-            outs=[work / "img" / "images"], idx=idx, total=total)
     elif step == "blocks":
         blk = [work / "blocks", "--pptx", pptx,
-               "--atomic-objects", work / "img" / "atomic_objects.json",
                "--texts", work / "text" / f"{stem}_texts.md",
                "--formulas", work / "formula" / f"{stem}_formulas.md",
                "-o", work / "blocks" / f"{stem}_visual_blocks.json",
                "--captions", work / "blocks" / "captions.md"]
+        # 逃生通道：VLM（qwen）单块解读耗时不可控时，可用环境变量
+        # PPTX_PASER_NO_VLM=1 让 blocks 步骤跳过 VLM（纯规则聚类，0 Token）；
+        # 最终 semantic_description 仍由 blocks_json 步骤的 DeepSeek 生成
+        if os.environ.get("PPTX_PASER_NO_VLM", "").strip() == "1":
+            blk.append("--no-vlm")
         if action == "resume":
             blk.append("--resume")
         _run_step(
@@ -480,7 +468,7 @@ def _exec_step(step: str, args, work: Path, stem: str,
             outs=[work], idx=idx, total=total)
     elif step == "blocks_json":
         bd = [work / "blocks",
-              "--atomic-objects", work / "img" / "atomic_objects.json",
+              "--atomic-objects", work / "blocks" / "atomic_objects.json",
               "--texts", work / "text" / f"{stem}_texts.md",
               "--formulas", work / "formula" / f"{stem}_formulas.md",
               "--pptx", pptx,
@@ -506,26 +494,19 @@ def _exec_step(step: str, args, work: Path, stem: str,
 
 
 def _organize(out: Path, work: Path, stem: str) -> None:
-    """产物归位：结果目录=images/ + sources/ + <名>_captions.md +
-    <名>_textbook.md + <名>_visual_blocks.json + images_meta.json；
-    其余全部移到 过程文件/（对齐 word-wzq 交付物体系 v2.3.0）。"""
+    """产物归位：结果目录 = images/（块渲染图）+ sources/（块矢量资源）+
+    <名>_visualBlock_text_binding.json（块↔文本关系）+ <名>_captions.md +
+    <名>_textbook.md + <名>_visual_blocks.json（由 blocks_json 步骤直接写）；
+    其余全部移到 过程文件/。
+
+    旧的「单张原子图 + images_meta.json」交付物已取消：原子对象仅作为可视逻辑
+    块聚类的几何地基，原子图不再单独交付；矢量/Visio 源改由「块」持有
+    （sources/ 按 block_id 归档）。
+    """
     proc = out / PROC_DIR
     proc.mkdir(parents=True, exist_ok=True)
 
-    # 结果文件
-    images_src = work / "img" / "images"
-    if images_src.is_dir():
-        dst = out / "images"
-        if dst.exists():
-            shutil.rmtree(dst, ignore_errors=True)
-        shutil.move(str(images_src), str(dst))
-        print(f"[归位] images/ → {out}", file=sys.stderr)
-    cap = work / "blocks" / "captions.md"
-    if cap.is_file():
-        shutil.move(str(cap), str(out / f"{stem}_captions.md"))
-        print(f"[归位] 可视逻辑块解读文档 → {out / (stem + '_captions.md')}",
-              file=sys.stderr)
-    # 可视逻辑块渲染图 → images/（合并到已归位的原子图集）
+    # 1) 可视逻辑块渲染图 → images/（统一图片集，与 captions.md / JSON 对应）
     blk_images = work / "blocks" / "images"
     if blk_images.is_dir():
         dst = out / "images"
@@ -539,69 +520,56 @@ def _organize(out: Path, work: Path, stem: str) -> None:
                 except OSError:
                     pass
         print(f"[归位] 可视逻辑块渲染图 {n} 张 → {dst}", file=sys.stderr)
+
+    # 2) 可视逻辑块矢量/Visio 资源 → sources/（按 block_id 命名）
+    blk_sources = work / "blocks" / "sources"
+    if blk_sources.is_dir():
+        dst = out / "sources"
+        dst.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for f in sorted(blk_sources.iterdir()):
+            if f.is_file() and not (dst / f.name).exists():
+                try:
+                    shutil.copy2(str(f), str(dst / f.name))
+                    n += 1
+                except OSError:
+                    pass
+        if n:
+            print(f"[归位] 块矢量资源 {n} 个 → {dst}", file=sys.stderr)
+        else:
+            try:
+                dst.rmdir()
+            except OSError:
+                pass
+
+    # 3) 块↔文本图文关联 → <名>_visualBlock_text_binding.json
+    bnd = work / "blocks" / f"{stem}_visualBlock_text_binding.json"
+    if bnd.is_file():
+        shutil.move(str(bnd),
+                    str(out / f"{stem}_visualBlock_text_binding.json"))
+        print(f"[归位] 块↔文本关联 → "
+              f"{out / (stem + '_visualBlock_text_binding.json')}",
+              file=sys.stderr)
+
+    # 4) captions.md / textbook.md
+    cap = work / "blocks" / "captions.md"
+    cap_dst = out / f"{stem}_captions.md"
+    if cap.is_file() and not cap_dst.exists():
+        shutil.move(str(cap), str(cap_dst))
+        print(f"[归位] 可视逻辑块解读文档 → "
+              f"{out / (stem + '_captions.md')}", file=sys.stderr)
+    elif cap.is_file():
+        # 最终版已由 blocks_json 步骤写到结果目录，丢弃中间版
+        try:
+            cap.unlink()
+        except OSError:
+            pass
     tb = work / f"{stem}_textbook.md"
     if tb.is_file():
         shutil.move(str(tb), str(out / f"{stem}_textbook.md"))
         print(f"[归位] 教材文案 → {out / (stem + '_textbook.md')}",
               file=sys.stderr)
     # visual_blocks.json 由 blocks_json 步骤直接写到 out，这里只校验
-
-    # 对齐 word 交付物体系（§2/§3.6）：sources/ 顶层矢量源归档 + images_meta.json
-    manifest_path = work / "img" / "manifest.json"
-    if manifest_path.is_file():
-        try:
-            recs = json.loads(manifest_path.read_text(encoding="utf-8"))
-            vec_exts = {"vsdx", "vsd", "svg", "wmf", "emf"}
-            src_dir = out / "sources"
-            src_dir.mkdir(parents=True, exist_ok=True)
-            n_src = 0
-            by_page_dir = work / "img" / "by_page"
-            for r in recs:
-                fn = r.get("output_file", "")
-                if not fn or (r.get("original_format") or "").lower() \
-                        not in vec_exts:
-                    continue
-                src_file = by_page_dir / fn
-                if src_file.is_file():
-                    try:
-                        shutil.copy2(str(src_file), str(src_dir / fn))
-                        n_src += 1
-                    except OSError:
-                        pass
-            if n_src:
-                print(f"[归位] 矢量源 {n_src} 个 → {src_dir}", file=sys.stderr)
-            else:
-                try:
-                    src_dir.rmdir()
-                except OSError:
-                    pass
-            # images_meta.json（word §3.6 结构，bind 数据源）
-            meta = []
-            for r in recs:
-                fn = r.get("output_file", "")
-                if not fn:
-                    continue
-                meta.append({
-                    "file": fn,
-                    "block": r.get("page", 0),
-                    "par_index": 1,
-                    "in_table": False,
-                    "cx": 0, "cy": 0,
-                    "w": r.get("width", 0) or r.get("shape_w", 0),
-                    "h": r.get("height", 0) or r.get("shape_h", 0),
-                    "kind": (r.get("original_format") or "").lower() or "unknown",
-                    "progid": r.get("ole_progid", ""),
-                    "source": r.get("source_media", ""),
-                })
-            meta_path = out / "images_meta.json"
-            meta_path.write_text(
-                json.dumps(meta, ensure_ascii=False, indent=1),
-                encoding="utf-8")
-            print(f"[归位] images_meta.json（{len(meta)} 条）→ {out}",
-                  file=sys.stderr)
-        except Exception as e:
-            print(f"[警告] images_meta.json/sources 生成失败：{e}",
-                  file=sys.stderr)
 
     # 其余全部进过程文件
     moved = 0
@@ -647,22 +615,17 @@ def _plan_and_confirm(est: dict, skip: set) -> bool:
     if "formula" not in skip:
         steps.append(("2. 公式提取",
                       "解析公式 OLE/OMML 为 LaTeX。本地执行，不消耗 API。"))
-    if "img" not in skip:
-        steps.append(("3. 图片提取+原子对象",
-                      "解析 PPT 全部图片/背景/填充/形状/连接符/表格，"
-                      "生成 images/ 与 atomic_objects.json。本地执行，"
-                      "不消耗 API。"))
     if "blocks" not in skip:
-        est_cap = n_img * (1200 + 400 + 250)   # 图片+页上下文+输出 ≈ 每图 1850
-        steps.append(("4. 可视逻辑块解析 + Semantic Captioning（消耗 Token）",
-                      f"约 {n_img} 个原子对象经空间聚类拆成每页 1~6 个可视逻辑块，"
+        est_cap = n_s * (1200 + 400 + 250)   # 每页块+页上下文+输出 ≈ 1850
+        steps.append(("3. 可视逻辑块解析 + Semantic Captioning（消耗 Token）",
+                      f"每页原子对象经空间聚类拆成 1~6 个可视逻辑块，"
                       f"逐块喂入视觉模型（qwen3.7-plus）判定类型并生成语义描述，"
                       f"附带该页文本/公式上下文。"
                       f"**预计消耗约 {est_cap//1000} 万~{int(est_cap*1.3)//1000} 万 Token**，"
-                      f"耗时约 {max(1, n_img*8//60)} 分钟。"))
+                      f"耗时约 {max(1, n_s*8//60)} 分钟。"))
     if "related" not in skip:
         est_rel = n_img * (300 + 200 + 100)
-        steps.append(("5. 可视逻辑块相关性过滤（消耗 Token）",
+        steps.append(("4. 可视逻辑块相关性过滤（消耗 Token）",
                       f"约 {n_img} 个块的描述与该页正文交 DeepSeek "
                       f"(deepseek-v4-flash) 判定相关性，剔除 logo/作者/单位等"
                       f"无关块。"
@@ -670,14 +633,14 @@ def _plan_and_confirm(est: dict, skip: set) -> bool:
                       f"耗时约 {max(1, n_img*3//60)} 分钟。"))
     if "author" not in skip:
         est_au = (n_s * 500 + n_f * 80 + n_s * 400)
-        steps.append(("6. 教材文案生成（消耗 Token）",
+        steps.append(("5. 教材文案生成（消耗 Token）",
                       f"文本/公式/可视逻辑块解读三份文档输入 DeepSeek "
                       f"(deepseek-v4-flash) 生成 {n_s} 页教材文案；"
                       f"原文超 300 字的页直接提取不扩写。"
                       f"**预计消耗约 {est_au//1000} 万~{int(est_au*1.5)//1000} 万 Token**，"
                       f"耗时约 {max(1, n_s*12//60)} 分钟。"))
     if "blocks_json" not in skip:
-        steps.append(("7. 可视逻辑块 JSON 组装（含跨模态关系，消耗 Token）",
+        steps.append(("6. 可视逻辑块 JSON 组装（含跨模态关系，消耗 Token）",
                       "按 pptx_multimodal_slide_v2.0 schema 组装 "
                       "visual_blocks.json，并调用 DeepSeek 生成每块与该页"
                       "文字的关系描述。"))
@@ -730,7 +693,7 @@ def _report(out: Path, stem: str) -> None:
     print(f"  2. {stem}_captions.md —— 可视逻辑块解读：每块的语义描述"
           "（类型/表达目标/作用/图文理解/教学用途），配图说明直接引用；",
           file=sys.stderr)
-    print("  3. images/ —— 可视逻辑块渲染图 + 原子图片集：与 captions.md "
+    print("  3. images/ —— 可视逻辑块渲染图：与 captions.md "
           "的 IMG 编号对应；", file=sys.stderr)
     print(f"  4. {stem}_visual_blocks.json —— 可视逻辑块全栈解析：每页的块"
           "（几何/拓扑/资源/类型/语义描述）与跨模态关系，供检索/知识库/"
@@ -743,13 +706,13 @@ def _report(out: Path, stem: str) -> None:
 
 def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        prog="PPT-Paser",
+        prog="pptx-paser",
         description="整体运行：图片/公式/文本提取→图片AI解读→教材文案→图文绑定")
     ap.add_argument("pptx", help="输入的 .pptx 文件路径")
     ap.add_argument("-o", "--output", default="output",
                     help="生成结果目录（结果文件+过程文件/ 放这里）")
     ap.add_argument("--skip", default=None,
-                    help="逗号分隔跳过步骤：text,formula,img,blocks,"
+                    help="逗号分隔跳过步骤：text,formula,blocks,"
                          "related,author,blocks_json")
     ap.add_argument("--author-pages", default=None,
                     help="透传给教材文案指令：只生成指定页，如 '1,4'"
@@ -772,7 +735,7 @@ def _main(argv=None) -> int:
     stem = pptx.stem
     skip = set(s.strip() for s in (args.skip or "").split(",") if s.strip())
 
-    print(f"\n===== PPT-Paser 整体运行：{pptx.name} =====", file=sys.stderr)
+    print(f"\n===== pptx-paser 整体运行：{pptx.name} =====", file=sys.stderr)
     print(f"输出目录：{out}\n", file=sys.stderr)
 
     # 1) 环境检查（自动安装缺失组件 + 权重/LO 探测并逐项显示）
@@ -858,7 +821,7 @@ def _main(argv=None) -> int:
         _log(out, f"整体运行异常：{e}")
         return 1
 
-    print("\n===== PPT-Paser 全部完成 =====", file=sys.stderr)
+    print("\n===== pptx-paser 全部完成 =====", file=sys.stderr)
     print(f"结果目录：{out}", file=sys.stderr)
     print(f"  - {out / 'images'}", file=sys.stderr)
     print(f"  - {out / (stem + '_captions.md')}", file=sys.stderr)

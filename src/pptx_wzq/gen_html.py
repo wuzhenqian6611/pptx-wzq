@@ -1,4 +1,4 @@
-"""gen_html.py — 把 PPT-Paser 产物（binding.json + images/）生成为
+"""gen_html.py — 把 pptx-wzq 产物（visualBlock_text_binding.json + images/）生成为
 图文并茂、公式正确渲染的单文件教材 HTML。
 
 用法：
@@ -258,12 +258,12 @@ footer {{ text-align: center; color: var(--ink-2); font-size: 12.5px;
   <div class="course">Electronics · 电子信息工程</div>
   <h1>{chapter_title}</h1>
   <div class="sub">{stem}</div>
-  <div class="meta">由 PPT-Paser 流水线生成 · 共 {len(toc_items)} 节 ·
+  <div class="meta">由 pptx-wzq 流水线生成 · 共 {len(toc_items)} 节 ·
     图片 {len(list(img_dir.glob('*')))} 张 · 公式由 MathJax 渲染</div>
 </header>
 <nav class="toc-wrap" id="toc"><h2>目 录</h2><div class="toc">{''.join(toc_items)}</div></nav>
 <main>{''.join(sections)}</main>
-<footer>本章教材文档由 PPT 课件智能解析生成（PPT-Paser），
+<footer>本章教材文档由 PPT 课件智能解析生成（pptx-wzq），
 公式与图片均来自课件原始内容 · 仅供教学参考</footer>
 </body>
 </html>"""
@@ -272,8 +272,8 @@ footer {{ text-align: center; color: var(--ink-2); font-size: 12.5px;
 def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="gen-html",
-        description="把 PPT-Paser 产物生成图文并茂的教材 HTML")
-    ap.add_argument("dir", help="产物目录（含 <名>_binding.json 与 images/）")
+        description="把 pptx-wzq 产物生成图文并茂的教材 HTML")
+    ap.add_argument("dir", help="产物目录（含 <名>_visualBlock_text_binding.json 与 images/）")
     ap.add_argument("-o", "--output", default=None, help="输出 html 路径")
     ap.add_argument("--title", default=None, help="章标题（默认取自 stem）")
     args = ap.parse_args(argv)

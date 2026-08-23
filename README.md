@@ -91,7 +91,7 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 
 ```
 结果目录/
-├─ images/              可视逻辑块渲染图 + 原子图片集（slide_NN_blk_NN.png）
+├─ images/              可视逻辑块渲染图（slide_NN_blk_NN.png）
 ├─ sources/             矢量源文件归档（vsdx/svg/wmf/emf，可编辑资产）
 ├─ <名>_texts.md        文本清单（ID | 类型 | 文本 | 坐标；表格行类型）
 ├─ <名>_captions.md     可视逻辑块级 AI 解读（# images 图片 AI 解读，块为条目单位）
@@ -100,7 +100,7 @@ pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
 │                       slide_info/textual_content/visual_blocks（几何/拓扑/
 │                       资源/类型/semantic_description）/cross_modal_relations/
 │                       summary；替换原 binding.json）
-├─ images_meta.json     图片元数据（图片→页/尺寸/来源）
+├─ <名>_visualBlock_text_binding.json  可视逻辑区↔文本 图文关联（块↔文本）
 ├─ <名>_related_filter.json  可视逻辑块相关性过滤审计（被删块 + 原因）
 ├─ state.json           断点续传状态机（含 doc_md5/tool_version，换源提示）
 ├─ pipeline.log         运行日志（每步开始/完成/失败时间戳）
