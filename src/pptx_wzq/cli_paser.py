@@ -529,7 +529,8 @@ def _organize(out: Path, work: Path, stem: str) -> None:
     （sources/ 按 block_id 归档）。
     """
     proc = out / PROC_DIR
-    proc.mkdir(parents=True, exist_ok=True)
+    # v2.0 生命周期：成功即清理，不留过程文件目录（不创建 过程文件/）；
+    # 仅清理历史残留的 PROC_DIR 空目录（若存在）
 
     # 1) 可视逻辑块渲染图 → images/（统一图片集，与 captions.md / JSON 对应）
     blk_images = work / "blocks" / "images"
@@ -546,21 +547,31 @@ def _organize(out: Path, work: Path, stem: str) -> None:
                     pass
         print(f"[归位] 可视逻辑块渲染图 {n} 张 → {dst}", file=sys.stderr)
 
-    # 2) 可视逻辑块矢量/Visio 资源 → sources/（按 block_id 命名）
+    # 2) 可视逻辑块矢量/Visio/XML/资源 → sources/（按 block_id 命名）
+    #    **递归**：rldimg/ 等子目录（组内资源图片）必须一并归位（规则 10）
     blk_sources = work / "blocks" / "sources"
     if blk_sources.is_dir():
         dst = out / "sources"
         dst.mkdir(parents=True, exist_ok=True)
         n = 0
         for f in sorted(blk_sources.iterdir()):
-            if f.is_file() and not (dst / f.name).exists():
+            if f.is_dir():
+                # 子目录（rldimg/ 等）整目录归位，目标已存在则跳过
+                sub = dst / f.name
+                if not sub.exists():
+                    try:
+                        shutil.copytree(str(f), str(sub))
+                        n += sum(1 for _ in f.rglob("*") if _.is_file())
+                    except OSError:
+                        pass
+            elif f.is_file() and not (dst / f.name).exists():
                 try:
                     shutil.copy2(str(f), str(dst / f.name))
                     n += 1
                 except OSError:
                     pass
         if n:
-            print(f"[归位] 块矢量资源 {n} 个 → {dst}", file=sys.stderr)
+            print(f"[归位] 块资源 {n} 个 → {dst}", file=sys.stderr)
         else:
             try:
                 dst.rmdir()
@@ -616,22 +627,22 @@ def _organize(out: Path, work: Path, stem: str) -> None:
     for item in sorted(work.iterdir()):
         try:
             if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
+                shutil.rmtree(item)
             else:
                 item.unlink()
             removed += 1
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[警告] 删除过程文件失败 {item.name}：{e}",
+                  file=sys.stderr)
     print(f"[清理] 删除过程文件 {removed} 项（v2.0 成功即清理）",
           file=sys.stderr)
-    try:
-        shutil.rmtree(work, ignore_errors=True)
-    except OSError:
-        pass
-    try:
-        shutil.rmtree(out / PROC_DIR, ignore_errors=True)
-    except OSError:
-        pass
+    for _p in (work, out / PROC_DIR):
+        try:
+            if _p.exists():
+                shutil.rmtree(_p)
+        except OSError as e:
+            print(f"[警告] 清理目录失败 {_p.name}：{e}（不影响交付物，"
+                  f"可手动删除）", file=sys.stderr)
 
 
 def _estimate_usage(pptx: Path) -> dict:
@@ -746,8 +757,8 @@ def _report(out: Path, stem: str) -> None:
     print(f"  4. {stem}_visual_blocks.json —— 可视逻辑块全栈解析：每页的块"
           "（几何/拓扑/资源/类型/语义描述）与跨模态关系，供检索/知识库/"
           "RAG 使用；", file=sys.stderr)
-    print("  5. 过程文件/ —— 中间产物（by_page/manifest/texts/formulas/"
-          "atomic_objects/过滤报告等），需要溯源或二次加工时使用。",
+    print(f"  5. sources/ —— 图块源资源：grpSp XML 段 + rldimg/ 资源图片"
+          "+ 矢量源（v2.0 成功即清理全部过程文件，无 过程文件/ 目录）。",
           file=sys.stderr)
     print("", file=sys.stderr)
 
@@ -872,10 +883,11 @@ def _main(argv=None) -> int:
     print("\n===== pptx-paser 全部完成 =====", file=sys.stderr)
     print(f"结果目录：{out}", file=sys.stderr)
     print(f"  - {out / 'images'}", file=sys.stderr)
+    print(f"  - {out / 'sources'}（含 rldimg/）", file=sys.stderr)
     print(f"  - {out / (stem + '_captions.md')}", file=sys.stderr)
     print(f"  - {out / (stem + '_textbook.md')}", file=sys.stderr)
     print(f"  - {out / (stem + '_visual_blocks.json')}", file=sys.stderr)
-    print(f"过程文件：{out / PROC_DIR}", file=sys.stderr)
+    print("（v2.0 成功即清理，无过程文件）", file=sys.stderr)
     _report(out, stem)
     return 0
 
