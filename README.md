@@ -1,120 +1,261 @@
 # pptx-wzq · PPT 多模态教学知识库自动化构建
 
 > **作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063**
-> 本项目帮助高校教师把教学 PPT 自动转化为图文并茂的多模态教学知识库。
+> 本项目帮助高校教师把教学 PPT 自动转化为**图文并茂、可检索、可复用、可再加工**的多模态教学知识库。
+> 当前版本：**2.5.0**（PyPI：https://pypi.org/project/pptx-wzq/ · GitHub：https://github.com/wuzhenqian6611/pptx-wzq）
 
-把一份教学 PPT 自动转化为**可检索、可复用、可再加工**的多模态教学知识库：
-图片集 + 图片 AI 理解 + 公式 LaTeX + 教材文案 + 图文绑定 JSON，并可一键导出
-教材 HTML 与教学 Deck。
+---
 
-```
-PPT(.pptx)
-  → 文本提取（文本ID+坐标）  pptx-text
-  → 公式提取        pptx-formula
-  → 图片提取/过滤 + 原子对象（shape/connector/table）  pptx-img
-  → 可视逻辑块解析 + Semantic Captioning（合并图片AI解读）  pptx-blocks
-  → 可视逻辑块相关性过滤（剔除 logo/作者/单位等无关块）  pptx-related
-  → 教材文案（原文超 300 字直出不扩写）  pptx-author
-  → 可视逻辑块 JSON 组装（pptx_multimodal_slide_v2.0 全栈解析）  pptx-blocks
-  → 一条命令编排（日志 + 断点续传）  pptx-paser
-  → 教材 HTML/Deck  pptx-html / pptx-deck
-```
+## 目录
 
-## 安装
+- [一、它能做什么](#一它能做什么)
+- [二、安装与环境要求](#二安装与环境要求)
+- [三、快速开始](#三快速开始)
+- [四、命令一览](#四命令一览)
+- [五、输入 PPTX 预处理要求](#五输入-pptx-预处理要求)
+- [六、工作流程（8 环节）](#六工作流程8-环节)
+- [七、输出文档体系与内部格式](#七输出文档体系与内部格式)
+- [八、技术架构](#八技术架构)
+- [九、图块识别规则（16 条）](#九图块识别规则16-条)
+- [十、生命周期与可靠性](#十生命周期与可靠性)
+- [十一、常见问题](#十一常见问题)
+- [十二、版本演进](#十二版本演进)
+- [十三、文档与许可](#十三文档与许可)
+
+---
+
+## 一、它能做什么
+
+输入一份教学 PPT（.pptx），自动完成 **8 环节流水线**：图块提取 → 文本提取 → 公式提取 → 图块 AI 解读 → 相关性过滤 → 教材文案（整篇自主分章分节）→ JSON 组装 → 输出。
+
+**核心能力：**
+
+- **图块（可视逻辑块）优先**：以「组合即图块」为第一原则，作者用 PPT 组合工具绘制的逻辑图/示意图整体保留（原生 XML 段），而非拆散成碎片。
+- **源语言级解构**：grpSp 组合保留原生 XML 段（p:/a:/r: 前缀）；Visio/vsdx 剥离原生文件；公式转 LaTeX——信息不降维。
+- **模型按块路由**：有 XML 的块 → DeepSeek 读 XML（组内公式转 LaTeX）；纯像素图块 → qwen VLM 兜底；DeepSeek 空响应自动降级。
+- **教材级文案**：整个 PPT 视为一部完整教材，DeepSeek 自主划分若干章（`# 第X章 章名`）、每章若干节（`## 第X节 节名`，一节可含多页），每页内容首行标注所属章节；**500 字为限**（原文 ≤500 字扩写到不少于 500 字；>500 字直出整理，不改原意、不增字数）。
+- **生命周期自管**：全流程成功即清理过程文件；中断保留断点、二次运行自动接续。
+
+## 二、安装与环境要求
+
+### 系统要求
+
+| 项 | 要求 |
+|---|---|
+| 操作系统 | **Windows 10/11**（强烈建议；渲染通道仅支持 PowerPoint COM） |
+| Python | 3.9 及以上 |
+| Office | **Microsoft Office PowerPoint**（必装：块渲染走 PowerPoint 原生；无 Office 渲染优雅降级） |
+| API Key | `DEEPSEEK_API_KEY`（语义解读/教材文案）、`DASHSCOPE_API_KEY`（qwen VLM 兜底） |
+
+### 安装
 
 ```bash
 pip install pptx-wzq            # 核心
 pip install "pptx-wzq[ocr]"     # 含本地公式 OCR（pix2tex，可选）
 ```
 
-Windows 下会自动安装 pywin32（用于 PowerPoint 渲染矢量图）。
-首次运行 `pptx-paser` 会自动补齐缺失组件、检查 API Key
-（DeepSeek / 阿里云百炼）并引导注册。
+安装后自带完整文档（使用手册 + 技术分析）：
 
-> **权重来源与许可**：图片过滤内置的 YOLO 模型权重 `yolov5su.pt`
-> 来自 [ultralytics](https://github.com/ultralytics/ultralytics)（YOLO 官方），
-> 采用 **AGPL-3.0** 许可证随包分发；商用或闭源使用请自行评估其开源条款。
+```python
+from pptx_wzq import docs
+print(docs.__path__)   # 查看 docs/ 目录（含 html/pdf/md）
+```
 
-## 快速开始
+> **权重来源与许可**：图片过滤内置的 YOLO 模型权重 `yolov5su.pt` 来自
+> [ultralytics](https://github.com/ultralytics/ultralytics)（YOLO 官方），采用 **AGPL-3.0**
+> 许可证随包分发；商用或闭源使用请自行评估其开源条款。
+
+## 三、快速开始
 
 ```bash
-# 一条命令跑完整流水线（自动装依赖 / 引导 Key / 预估 Token / 确认执行）
-pptx-paser 第九章功率放大电路.pptx -o output
+# 一条命令跑完 8 环节（推荐）
+pptx-paser "C:\课件\战略管理.pptx" -o "C:\输出\战略管理知识库"
 
-# 结果目录：
-#   output/images/ + output/<名>_captions.md + <名>_textbook.md + <名>_binding.json
+# 跳过相关性与文案（省 Token）
+pptx-paser "C:\课件\战略管理.pptx" -o out --skip related,author
 
-# 导出教材 HTML（MathJax 公式渲染）
-pptx-html output -o output/第九章.html
-
-# 分步执行 / 断点续跑
-pptx-img 课件.pptx -o out
-pptx-caption out/images -o cap.md --texts out/texts.md --formulas out/formulas.md
-pptx-related out -o out/课件_captions.md --texts out/texts.md
-pptx-paser 课件.pptx -o out --skip img,formula,text
-pptx-paser 课件.pptx -o out --dry-run    # 预览续跑/执行计划（不执行）
-pptx-paser 课件.pptx -o out --reset      # 强制从头重跑
+# 断点续传（中断后重跑同命令自动接续）
+pptx-paser "C:\课件\战略管理.pptx" -o out
 ```
 
-> **断点续传**：`pptx-paser` 在结果目录写 `state.json`（步骤状态机）与
-> `pipeline.log`（运行日志）。中途中断后重跑同一条命令，会自动跳过已完成
-> 步骤、从断点续跑（图片解读按图、教材文案按页、图文绑定按页），
-> 无需手动 `--skip`；`--dry-run` 可先预览计划。
+## 四、命令一览
 
-## 指令一览
+| 命令 | 功能 |
+|---|---|
+| `pptx-paser` | 总编排器：8 环节一条命令，断点续传 / 成功清理 |
+| `pptx-blocks` | 图块提取+解构+渲染；`--caption-sources` 按 sources/ 顺序解读 |
+| `pptx-text` | 文本提取（in_group / 表格 Markdown） |
+| `pptx-formula` | 公式提取 → LaTeX |
+| `pptx-caption` | 图片/图块解读（模型路由） |
+| `pptx-related` | 块相关性过滤 + 审计 |
+| `pptx-author` | 整篇分章分节教材文案（500 字为限） |
+| `pptx-bind` | 图文绑定 JSON |
+| `pptx-html` / `pptx-deck` | 教材 HTML / 教学 Deck 导出 |
 
-| 命令 | 功能 | 模型 | Token |
-|---|---|---|---|
-| `pptx-text` | 逐页文本/表格提取（排除页眉页脚），每条文本带 text_id 与幻灯片坐标 x/y/w/h | — | 0 |
-| `pptx-formula` | 公式三路径提取（OMML / EQ3-MTEF / OCR）→ LaTeX | — | 0 |
-| `pptx-img` | 图片提取 + 三路过滤 + WMF 识别/渲染 + 公式图片补提；Visio OLE 按容器存 `.vsdx`/`.vsd`；emf/wmf/svg 规范化 svg（失败回退 wmf）；记录幻灯片坐标；**收集原子对象（shape/connector/table → atomic_objects.json）** | — | 0 |
-| `pptx-blocks` | **可视逻辑块全栈解析**：四向种子扩展区域生长把每页拆成 1~6 块 → 块渲染 PNG → 图/树拓扑 → 跨模态关系 → `visual_blocks.json`（pptx_multimodal_slide_v2.0 schema）+ 块级 captions.md；`--semantic-model deepseek-v4-flash` 用 **DeepSeek 生成每块 semantic_description**（表达目标/作用/抽象特征/图文描述/教学用途）；`--no-vlm` 纯规则聚类 | deepseek-v4-flash / qwen3.7-plus | 有 |
-| `pptx-caption` | （旧）图片 AI 解读——已并入 `pptx-blocks`，保留兼容 | qwen3.7-plus | 有 |
-| `pptx-related` | 可视逻辑块相关性过滤：DeepSeek 判定块与正文是否相关，无关块（logo/作者/单位/项目类别/重复装饰等）连同解读一并删除，写审计 json | deepseek-v4-flash | 有 |
-| `pptx-author` | 教材文案（学科推断 + 整文生成 + 自适应分批）；某页原文超 300 字直接提取不扩写（`--no-expand-threshold`） | deepseek-v4-flash | 有 |
-| `pptx-bind` | （旧）图文绑定 JSON——保留兼容，新流程由 `pptx-blocks` 的 `visual_blocks.json` 替代 | deepseek-v4-flash | 有 |
-| `pptx-paser` | 整体编排（**text → formula → img → blocks → related → author → blocks_json**）：环境自检 / Key 引导 / Token 预估 / **日志+断点续传**（state.json / pipeline.log）/ `--dry-run` / `--reset` | — | — |
-| `pptx-html` | 单文件教材 HTML（MathJax 公式 + PPT 原生标题） | — | 0 |
-| `pptx-deck` | 教育蓝图风格教学 Deck（示例脚本） | — | 0 |
+## 五、输入 PPTX 预处理要求
 
-## API Key
+> **核心思想：用 PPT 自带工具给解析器打「块边界」标注。** 组合的数量 = 该页图块数量的上限基准，可据此验收。预处理不是必须的（无组合也能跑），但组合能让图块提取完全确定、可回归。
 
-| 用途 | 平台 | 模型 |
+| 对象 | 预处理操作 | 解析器行为 |
 |---|---|---|
-| 可视逻辑块 Semantic Captioning / 公式图片识别 | 阿里云百炼（bailian.console.aliyun.com） | qwen3.7-plus |
-| 教材文案 / 学科判断 / 相关性判定 / 跨模态关系 | DeepSeek（platform.deepseek.com） | deepseek-v4-flash |
+| **逻辑图/示意图（要整体成块）** | 「开始 → 排列 → 组合」（Ctrl+G）把底图+文字框+箭头合成一个组合 | 整个组合 = 1 个 group 块，XML 段导出 sources/，渲染图存 images/ |
+| **嵌套组合** | 有意为之才用：嵌套 = 外层块的子结构；想分开就移出外层 | 嵌套组合并入外层 children，不单独成块 |
+| **Visio / vsdx 工程图** | **不要**组合进其他形状（否则被吞并）；保持独立 OLE 对象 | 独立成 visio 块：可剥离 → .vsdx；不可剥离 → XML 段 |
+| **公式** | 行内公式保持独立（不组合）→ 自动进 formulas.md；想并入图块就移进组合 | 组合内公式随块转 LaTeX；非组合公式独立提取 |
+| **首页/尾页** | 无需操作：默认按页序跳过第 1 页与末页的图块 | 封面/致谢不产块（文本/公式仍提取） |
+| **小像素图（装饰图标）** | 小于整页 20% 默认舍弃；想保留 → 组合进相邻图形 | 组合内小图豁免；非组合小图丢弃并写入审计 |
+| **表格** | 无需操作 | 输出 Markdown 表格（texts.md），不产块 |
+| **带裁剪的图片（srcRect）** | 无需操作（自动保持显示一致） | 元数据/资源/渲染/描述全程按裁剪 |
 
-缺失时 `pptx-paser` 会打印注册引导并交互写入环境变量（`DEEPSEEK_API_KEY` /
-`DASHSCOPE_API_KEY`）。
-
-## 产物
+## 六、工作流程（8 环节）
 
 ```
-结果目录/
-├─ images/              可视逻辑块渲染图（slide_NN_blk_NN.png）
-├─ sources/             矢量源文件归档（vsdx/svg/wmf/emf，可编辑资产）
-├─ <名>_texts.md        文本清单（ID | 类型 | 文本 | 坐标；表格行类型）
-├─ <名>_captions.md     可视逻辑块级 AI 解读（# images 图片 AI 解读，块为条目单位）
-├─ <名>_textbook.md     教材文案（直出标注在节标题后；原文超 300 字直出）
-├─ <名>_visual_blocks.json  可视逻辑块全栈解析（pptx_multimodal_slide_v2.0：
-│                       slide_info/textual_content/visual_blocks（几何/拓扑/
-│                       资源/类型/semantic_description）/cross_modal_relations/
-│                       summary；替换原 binding.json）
-├─ <名>_visualBlock_text_binding.json  可视逻辑区↔文本 图文关联（块↔文本）
-├─ <名>_related_filter.json  可视逻辑块相关性过滤审计（被删块 + 原因）
-├─ state.json           断点续传状态机（含 doc_md5/tool_version，换源提示）
-├─ pipeline.log         运行日志（每步开始/完成/失败时间戳）
-└─ 过程文件/            中间产物（by_page / manifest / texts / formulas / …）
+① blocks → ② text → ③ formula → ④ caption → ⑤ related → ⑥ author → ⑦ blocks_json → ⑧ 输出
 ```
 
-## 应用
+| 环节 | 职能 | 消耗 | 要点 |
+|---|---|---|---|
+| ① blocks | 图块提取 + 解构 | 本地 | 单阶段确定性拆块（grpSp→group / visio / 像素图≥20% / SVG-WMF）；XML 段每组合一个文件导出 sources/；rldimg 资源图落盘；PowerPoint COM 渲染块 PNG |
+| ② text | 文本提取 | 本地 | 排除页眉页脚/母版固定文本；组内文字标「[图块内文本]」；表格输出 Markdown |
+| ③ formula | 公式提取 | 本地 | 非组合公式 → LaTeX（OMML/MTEF/OCR 三级）；组合内公式排除 |
+| ④ caption | 图块 AI 解读 | DeepSeek+qwen | 按 sources/ 顺序：.xml → DeepSeek 读 XML（公式转 LaTeX）；.png → qwen 兜底 |
+| ⑤ related | 相关性过滤 | DeepSeek | 剔除 logo/作者/装饰块 → related_filter.json 审计 |
+| ⑥ author | 教材文案 | DeepSeek | 整篇自主分章分节（一节可含多页），每页标注章节；≤500 字扩写、>500 字直出整理 |
+| ⑦ blocks_json | 组装 + 语义增强 | DeepSeek | visual_blocks.json（v2.0）+ semantic_description + 跨模态关系 + binding 导出 |
+| ⑧ 输出 | 归位 + 清理 | 本地 | 成功即删过程文件；中断保留断点自动接续 |
 
-- 课程知识内容体系自动构建（章 → 节 → 知识点 → 公式 + 配图）
-- 基于学情测验的个性化学习内容生成
-- 教材二次开发与多形态出版（HTML / Deck / Word / PDF）
-- 智能问答与 RAG 检索（binding.json 作索引，答案图文并茂）
-- 试题与测验生成（按 Bloom 认知层次，真实配图出题）
+**模型路由（规则 11/16）**：DeepSeek-V4-Flash 读 sources/ 的 XML 段（grpSp/Visio-XML/SVG-WMF，公式转 LaTeX）；qwen3.7-plus 读像素图原图——仅纯像素图块 / DeepSeek 空响应兜底。
 
-## License
+## 七、输出文档体系与内部格式
 
-MIT
+### 结果目录结构（成功运行后）
+
+```
+<名>_result/
+├─ sources/                          # 图块源资源（解读唯一输入源）
+│  ├─ slide_07_blk_01_grp.xml        # grpSp XML 段（页注释 + 原生前缀，规则10）
+│  ├─ slide_05_blk_02.vsdx            # Visio 可剥离（规则13）
+│  ├─ slide_05_blk_03_ole.xml         # Visio 不可剥离 → XML（规则14）
+│  ├─ slide_08_blk_04_vec.xml         # SVG/WMF 矢量 XML（规则15）
+│  ├─ slide_19_blk_01.png             # 像素图块原图（qwen 解读输入，规则16）
+│  └─ rldimg/                         # grpSp XML 内 r:embed 引用的资源图片
+├─ images/                           # 块渲染图（PowerPoint，仅供人阅览）
+├─ <名>_visual_blocks.json             # 核心结构化（pptx_multimodal_slide_v2.0）
+├─ <名>_visualBlock_text_binding.json  # 图文关联（pptx_visual_block_text_binding_v1.0）
+├─ <名>_textbook.md                   # 教材文案（篇→章→节→页，每页标注章节）
+├─ <名>_captions.md                   # 块解读（绑定 sources/ 文件名 + 解读通道）
+├─ <名>_texts.md / _text_entries.json   # 文本清单（组内文字标[图块内文本]）
+├─ <名>_formulas.md                     # 非组合公式（LaTeX）
+└─ <名>_related_filter.json              # 相关性过滤审计
+（v2.0 起成功即清理：无 过程文件/；中断时保留断点供续传）
+```
+
+### VisualBlock 内部格式（visual_blocks.json 的块对象）
+
+```json
+{
+  "block_id": "blk_01", "page": 7, "block_type": "战略管理概念框架",
+  "bbox": {"x": 142.3, "y": 226.4, "w": 1026.2, "h": 400.2},
+  "z_index_range": [12, 45], "is_single": false,
+  "text": "战略哲学 商道 天道 人道 …",
+  "assets": {
+    "xml_source": "./sources/slide_07_blk_01_grp.xml",
+    "raster_png": null,
+    "rldimg": ["./sources/rldimg/slide_07_blk_01_image4.png", "…"]
+  },
+  "internal_structure": {"nodes": ["…"], "edges": ["…"]},
+  "semantic_description": {
+    "block_type": "战略管理概念框架",
+    "expression_goal": "展示战略管理概念框架的核心逻辑",
+    "expression_role": "将抽象概念通过战略哲学/商道/天道/人道具象化…",
+    "expression_features": ["概念框架", "层次结构", "关系图"],
+    "vlm_caption": "该图块以“战略哲学”为中心…",
+    "teaching_use": "教学辅助图示",
+    "formula_latex": "", "caption_source": "deepseek_xml"
+  },
+  "member_obj_ids": ["…"], "vector_resources": []
+}
+```
+
+### textbook.md 结构（v2.3 起）
+
+```
+# <名> 教材文案
+# 第1章 战略管理概述          ← DeepSeek 自主命名
+## 第1节 战略的概念与本质      ← 自主命名，一节可含多页
+## 第 N 页
+> 所属章节：第1章 战略管理概述 · 第1节 战略的概念与本质   ← 每页首行标注
+（不少于 500 字正文…）
+```
+
+## 八、技术架构
+
+| 模块 | 职责 | Token |
+|---|---|---|
+| `extract_pptx_images.py` | OOXML 原子对象提取（图片/形状/grpSp/表格/公式/图表）；XML 段原生提取；srcRect 裁剪；PowerPoint COM 渲染 | 0 |
+| `extract_texts.py` | 页面文本（in_group 标记）、表格 Markdown | 0 |
+| `visual_blocks.py` | 单阶段确定性拆块、块渲染、语义增强、跨模态关系 | DeepSeek |
+| `cli_blocks.py` | XML 段导出、rldimg 复制、caption 路由、binding、captions.md | DeepSeek+qwen |
+| `cli_author.py` | 整篇分章分节文案、500 字为限、自动分批（跨批章节延续） | DeepSeek |
+| `cli_related.py` | 相关性过滤 + 审计 | DeepSeek |
+| `cli_paser.py` | 总编排、断点续传（state.json）、归位、成功清理 | — |
+
+## 九、图块识别规则（16 条）
+
+### 识别层（1-9）——「组合即图块声明」
+
+| # | 规则 | 实现 |
+|---|---|---|
+| 1 | 一个 grpSp 组合即是一个图块，组合内一切内容读取为该图块内容 | kind="group"，children 递归收编 |
+| 2 | 嵌套组合不单独提取 | 嵌套仅作外层 children |
+| 3 | OLE Visio/vsdx 独立成块（除非在组合内） | kind="visio" 分支 |
+| 4 | 非组合像素图单独成块；重叠文本并入 | raster 独立块 + 重叠文本并入 |
+| 5 | 组合内公式作块内容；非组合公式独立提取 | formula 排除 in_group |
+| 6 | 首页/尾页图块舍弃 | skip_cover_pages 整页跳过 |
+| 7 | 非组合像素图 < 整页 20% 舍弃 | raster_min_area_ratio=0.20 |
+| 8 | 表格仍读取为表格（Markdown） | 表格移交 text 步骤 |
+| 9 | grpSp 内 srcRect 须全程一致 | children 携带 src_rect + 裁剪落盘 |
+
+### 解构/解读层（10-16）
+
+| # | 规则 | 实现 |
+|---|---|---|
+| 10 | grpSp 保留整段 XML，页标记，每组合一个独立 .xml 存 sources/ | `sources/slide_{页}_{块id}_grp.xml` |
+| 11 | grpSp 块 caption 用 DeepSeek 读 XML；公式转 LaTeX | `_ds_read_xml` + 超长压缩 + 重试 |
+| 12 | grpSp 块 PowerPoint 渲染 PNG 存 images/；PNG 不送 qwen | COM ExportAsFixedFormat PDF + PyMuPDF |
+| 13 | Visio 可剥离 → .vsdx 存 sources/ + PNG 存 images/ | 原生剥离 + 渲染 |
+| 14 | Visio 不可剥离 → XML 段，同 grpSp | `sources/slide_{页}_{块id}_ole.xml` |
+| 15 | SVG/WMF 同 Visio：尽量 XML 段，不行才 PNG | `sources/slide_{页}_{块id}_vec.xml` |
+| 16 | 仅无法 DeepSeek 解读的块才送 qwen | 模型路由 + 空响应降级链 |
+
+## 十、生命周期与可靠性
+
+- **成功即清理**：全流程成功后中间产物（by_page/atomic_objects.json/manifest/各步骤工作目录）全部删除，结果目录只留交付物；删除失败打印警告而非静默。
+- **中断续传**：中断保留 work + `state.json`（步骤状态机 pending/running/partial/done/failed）；再运行跳过已完成、自动接续缺失；`doc_md5` 换源检测 → 全量重跑；author 支持缺失页补跑（`--pages`）。
+
+## 十一、常见问题
+
+| 问题 | 说明 |
+|---|---|
+| 没有 Office 会怎样？ | 渲染降级：无块渲染图（images/ 为空）；XML/JSON/文案等其余产物正常 |
+| 没有 API Key？ | 跳过对应解读/文案步骤；`PPTX_PASER_NO_VLM=1` 可跳过 VLM 全流程 0 Token |
+| 中途中断？ | 重跑同命令自动接续（state.json + doc_md5 换源检测） |
+| DeepSeek 对某 XML 段空响应？ | 自动降级 qwen 读渲染图 → 规则模板兜底，保证每块有解读 |
+| 如何查安装版本与文档？ | `pptx-paser --version`；`from pptx_wzq import docs` |
+
+## 十二、版本演进
+
+| 版本 | 里程碑 |
+|---|---|
+| 1.5.0 | 六步管线重构（img 并入 blocks 自举）、三件套交付物、版本统一 |
+| 2.0.0 | 16 条规则落地：组合即块、单阶段确定性拆块、XML 段导出、DeepSeek caption 路由、PowerPoint 渲染、_organize 修复 |
+| 2.1.0 | captions 绑定 sources/ 源文件 + 通道标注；每页扩写 500 字 |
+| 2.2.0 | textbook 规则改 500 字为限（不足扩写、超出直出整理 _tidy_direct） |
+| 2.3.0 | Author 整篇自主分章分节（一节可含多页），每页标注章节 |
+| 2.4.0 | 技术分析报告（html/pdf/md）随安装包分发 |
+| 2.5.0 | 使用手册+技术分析合并文档（html/pdf）、README 全量更新 |
+
+## 十三、文档与许可
+
+- **文档**：完整「使用手册与技术分析」（HTML/PDF）随安装包分发于 `src/pptx_wzq/docs/`，安装后可 `from pptx_wzq import docs` 定位；README（本文档）为全量文字版。
+- **许可证**：MIT（本项目代码）；随包 YOLO 权重 `yolov5su.pt` 为 **AGPL-3.0**（见上文）。

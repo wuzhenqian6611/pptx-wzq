@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pptx-wzq 使用手册与技术分析</title>
+<style>
+:root{--navy:#0f4c81;--blue:#1b7fb5;--accent:#ed7d31;--ink:#1a2332;--muted:#4a5a6e;--line:#d8e2ec;--bg:#f6f9fc;--ok:#0e7a4d;--warn:#b45309;--red:#b3382c;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:"SimSun","宋体","Noto Serif SC",serif;color:var(--ink);background:var(--bg);line-height:1.8;font-size:16px;}
+.cover{background:linear-gradient(135deg,#0f4c81,#0d2a4d);color:#fff;padding:64px 30px 42px;text-align:center;border-bottom:5px solid var(--accent);}
+.cover h1{font-size:36px;letter-spacing:2px;}
+.cover .sub{margin-top:12px;font-size:16px;opacity:.92;}
+.cover .author{margin-top:20px;font-size:14px;opacity:.85;}
+.wrap{max-width:1020px;margin:0 auto;padding:26px 22px 70px;}
+h1.part{font-size:30px;color:#fff;background:var(--navy);padding:14px 24px;border-radius:10px;margin:44px 0 6px;}
+h2{font-size:25px;color:var(--navy);border-left:6px solid var(--accent);padding-left:13px;margin:40px 0 16px;}
+h3{font-size:19px;color:var(--blue);margin:24px 0 10px;}
+h4{font-size:16.5px;color:var(--ink);margin:16px 0 8px;}
+p{margin:8px 0;text-align:justify;}
+.lead{font-size:16.5px;color:var(--muted);}
+.cards{display:flex;gap:14px;flex-wrap:wrap;margin:16px 0;}
+.card{flex:1;min-width:230px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:15px 18px;}
+.card h4{color:var(--navy);margin:0 0 8px;font-size:16.5px;}
+.card p{color:var(--muted);font-size:14.5px;margin:0;}
+table{width:100%;border-collapse:collapse;margin:13px 0;background:#fff;font-size:14.5px;}
+th{background:var(--navy);color:#fff;padding:8px 11px;text-align:left;font-weight:bold;}
+td{border:1px solid var(--line);padding:8px 11px;vertical-align:top;}
+tr:nth-child(even) td{background:#f4f8fc;}
+code,.mono{font-family:Consolas,"Courier New",monospace;background:#eef2f7;padding:1px 6px;border-radius:4px;font-size:13.5px;}
+pre{font-family:Consolas,monospace;background:#0f2440;color:#d6e4ff;border-radius:10px;padding:14px 18px;overflow-x:auto;font-size:13px;line-height:1.7;margin:11px 0;}
+.tree{font-family:Consolas,monospace;background:#0f2438;color:#cfe3f5;border-radius:10px;padding:16px 20px;font-size:13px;line-height:1.85;overflow-x:auto;margin:12px 0;}
+.tree .dir{color:#8fd0ff;font-weight:bold;}
+.tree .hl{color:#ffd479;font-weight:bold;}
+.tree .cmt{color:#6f8aa8;}
+.fig{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px 10px;margin:16px 0;}
+.cap{text-align:center;color:var(--muted);font-size:13.5px;margin-top:8px;}
+.note{border-left:4px solid var(--blue);background:#eef6fb;padding:10px 16px;margin:12px 0;border-radius:0 8px 8px 0;}
+.good{border-left-color:var(--ok);background:#eefaf2;}
+.warn{border-left-color:var(--warn);background:#fdf6ec;}
+.steps{display:flex;flex-direction:column;gap:9px;margin:12px 0;}
+.step{display:flex;gap:13px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 15px;align-items:flex-start;}
+.step .n{background:var(--navy);color:#fff;border-radius:50%;min-width:29px;height:29px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;flex-shrink:0;}
+.step .b{flex:1;}
+.tag{display:inline-block;background:var(--blue);color:#fff;border-radius:4px;padding:0 7px;font-size:12.5px;margin:0 3px 2px 0;}
+.tag.g{background:var(--ok);}.tag.o{background:var(--warn);}.tag.r{background:var(--red);}
+footer{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 20px 40px;border-top:1px solid var(--line);}
+@media print{body{background:#fff;font-size:13.5px;} .wrap{max-width:100%;padding:0;} h2{page-break-before:auto;} .cover{page-break-after:avoid;} .card,.fig,.step{page-break-inside:avoid;}}
+</style>
+</head>
+<body>
+<header class="cover">
+  <h1>pptx-wzq 使用手册与技术分析</h1>
+  <div class="sub">PPT 多模态教学知识库自动化构建 · 版本 2.5.0 · 使用手册（第一部分）+ 技术分析报告（第二部分）</div>
+  <div class="author">作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</div>
+</header>
+<div class="wrap">
+
+<h1 class="part">第一部分 · 使用手册</h1>
+
+<h2>零、关于本工具与作者</h2>
+<div class="card">
+<p><strong>作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</strong></p>
+<p><strong>开发原因</strong>：高校教师在课程建设与教材建设中，长期面临「课件里的大量图片、公式、文本散落各处，难以整理为规范、可复用、图文并茂的教学资源」的痛点——手工整理一份课程的图文知识库往往要耗费数周。本工具把 <strong>PPT 自动转化为图文并茂的多模态教学知识库</strong>，让教师从机械整理中解放出来。</p>
+<p><strong>版本</strong>：当前 2.5.0（历经理念重构：v1.5 六步管线 → v2.0 十六规则落地 → v2.3 整篇分章分节 → v2.5 文档体系完备）。</p>
+</div>
+
+<h2>一、它能做什么（工作流程总览）</h2>
+<div class="card">
+<p>输入一份教学 PPT（.pptx），自动完成 <strong>8 环节流水线</strong>：</p>
+<div class="step"><div class="n">①</div><div class="b"><b>blocks 图块提取</b>：组合(grpSp)即图块，整体保留原生 XML 段到 sources/；像素图/Visio/矢量按规则拆块；PowerPoint 渲染块图。</div></div>
+<div class="step"><div class="n">②</div><div class="b"><b>text 文本提取</b>：逐页正文（排除页眉页脚），组内文字标「图块内文本」，表格输出 Markdown。</div></div>
+<div class="step"><div class="n">③</div><div class="b"><b>formula 公式提取</b>：非组合公式三路径（OMML/MTEF/OCR）→ LaTeX。</div></div>
+<div class="step"><div class="n">④</div><div class="b"><b>caption 图块解读</b>：按 sources/ 顺序——XML 段→DeepSeek 读 XML（公式转 LaTeX）；像素图→qwen 兜底。</div></div>
+<div class="step"><div class="n">⑤</div><div class="b"><b>related 相关性过滤</b>：剔除 logo/作者/装饰块（审计 json）。</div></div>
+<div class="step"><div class="n">⑥</div><div class="b"><b>author 教材文案</b>：整篇视为一部教材，DeepSeek 自主分章分节（一节可含多页），每页标注章节；500 字为限（不足扩写、超出直出整理）。</div></div>
+<div class="step"><div class="n">⑦</div><div class="b"><b>blocks_json 组装</b>：visual_blocks.json（v2.0 schema）+ DeepSeek 语义增强 + 跨模态关系 + binding 导出。</div></div>
+<div class="step"><div class="n">⑧</div><div class="b"><b>输出</b>：归位 images/ + sources/ + 各 JSON/MD；成功即清理过程文件；中断断点续传。</div></div>
+</div>
+
+<h2>二、环境要求与下载</h2>
+<div class="card">
+<h4>系统要求</h4>
+<ul>
+<li><b>Windows 10/11</b>（强烈建议；渲染通道仅支持 PowerPoint COM）</li>
+<li>Python 3.9 及以上</li>
+<li><b>Microsoft Office PowerPoint</b>（必装：块渲染走 PowerPoint 原生，无 Office 则无渲染图、优雅降级）</li>
+<li>API Key：<code>DEEPSEEK_API_KEY</code>（语义解读/教材文案）、<code>DASHSCOPE_API_KEY</code>（qwen VLM 兜底）</li>
+</ul>
+<h4>下载方式</h4>
+<ol>
+<li><strong>pip 安装发行版</strong>：<code>pip install pptx-wzq</code></li>
+<li><strong>GitHub 源码</strong>：<code>https://github.com/wuzhenqian6611/pptx-wzq</code></li>
+<li>安装后自带文档：<code>python -c "from pptx_wzq import docs; print(docs.__path__)"</code></li>
+</ol>
+</div>
+
+<h2>三、快速开始</h2>
+<pre># 一条命令跑完 8 环节（推荐）
+pptx-paser "C:\课件\战略管理.pptx" -o "C:\输出\战略管理知识库"
+
+# 只跑图块+文本+公式+解读（跳过相关性与文案，省 Token）
+pptx-paser "C:\课件\战略管理.pptx" -o out --skip related,author
+
+# 断点续传（中断后重跑同命令即可自动接续）
+pptx-paser "C:\课件\战略管理.pptx" -o out
+
+# 单步命令（叶子工具）
+pptx-blocks out --pptx "战略管理.pptx" --texts out\战略管理_texts.md --no-vlm
+pptx-author --texts out\战略管理_texts.md --formulas out\战略管理_formulas.md --captions out\战略管理_captions.md -o out\战略管理_textbook.md</pre>
+
+<h2>四、命令一览（10 个 console_script）</h2>
+<table>
+<tr><th>命令</th><th>功能</th></tr>
+<tr><td><code>pptx-paser</code></td><td>总编排器：8 环节一条命令跑完，断点续传/成功清理</td></tr>
+<tr><td><code>pptx-blocks</code></td><td>图块提取+解构+渲染；<code>--caption-sources</code> 模式按 sources/ 顺序解读</td></tr>
+<tr><td><code>pptx-text</code></td><td>文本提取（in_group/表格 Markdown）</td></tr>
+<tr><td><code>pptx-formula</code></td><td>公式提取 → LaTeX</td></tr>
+<tr><td><code>pptx-caption</code></td><td>图片/图块解读（模型路由）</td></tr>
+<tr><td><code>pptx-related</code></td><td>块相关性过滤 + 审计</td></tr>
+<tr><td><code>pptx-author</code></td><td>整篇分章分节教材文案（500 字为限）</td></tr>
+<tr><td><code>pptx-bind</code></td><td>图文绑定 JSON</td></tr>
+<tr><td><code>pptx-html</code> / <code>pptx-deck</code></td><td>教材 HTML / 教学 Deck 导出</td></tr>
+</table>
+
+<h2>五、输入 PPTX 预处理要求</h2>
+<div class="warn note"><b>核心思想：用 PPT 自带工具给解析器打「块边界」标注。</b>组合的数量 = 该页图块数量的上限基准，可据此验收。预处理不是必须的（无组合也能跑），但组合能让图块提取完全确定、可回归。</div>
+<table>
+<tr><th>对象</th><th>预处理操作</th><th>解析器行为</th></tr>
+<tr><td><b>逻辑图/示意图</b></td><td>Ctrl+G 把底图+文字+箭头合成一个组合</td><td>整体 = 1 个 group 块，XML 段导出 sources/，渲染图存 images/</td></tr>
+<tr><td><b>嵌套组合</b></td><td>有意为之才用；想分开就移出外层</td><td>并入外层 children，不单独成块</td></tr>
+<tr><td><b>Visio/vsdx</b></td><td><b>不要</b>组合进其他形状；保持独立 OLE</td><td>独立 visio 块：可剥离 .vsdx / 不可剥离 XML 段</td></tr>
+<tr><td><b>公式</b></td><td>行内公式保持独立；想并入图块就移进组合</td><td>组合内随块转 LaTeX；非组合进 formulas.md</td></tr>
+<tr><td><b>首页/尾页</b></td><td>无需操作（默认跳过图块）</td><td>封面/致谢不产块（文本/公式仍提取）</td></tr>
+<tr><td><b>小像素图</b></td><td>&lt;20% 页面默认舍弃；想保留 → 组合进相邻图形</td><td>组合内豁免；非组合丢弃入审计</td></tr>
+<tr><td><b>表格</b></td><td>无需操作</td><td>Markdown 表格输出（texts.md）</td></tr>
+<tr><td><b>srcRect 裁剪图</b></td><td>无需操作（自动一致）</td><td>元数据/资源/渲染/描述全程按裁剪</td></tr>
+</table>
+
+<h2>六、输出文档说明</h2>
+<div class="tree">
+<span class="dir">&lt;名&gt;_result/</span><br>
+├─ <span class="dir">sources/</span>   <span class="cmt"># 图块源（解读唯一输入）：grpSp XML 段 / .vsdx / 像素图原图 / rldimg/ 资源图</span><br>
+├─ <span class="dir">images/</span>    <span class="cmt"># 块渲染 PNG（PowerPoint，仅供人阅览）</span><br>
+├─ <span class="hl">&lt;名&gt;_visual_blocks.json</span>            <span class="cmt"># 核心结构化（v2.0）</span><br>
+├─ <span class="hl">&lt;名&gt;_visualBlock_text_binding.json</span> <span class="cmt"># 图文关联（v1.0）</span><br>
+├─ <span class="hl">&lt;名&gt;_textbook.md</span>                  <span class="cmt"># 教材文案（篇→章→节→页，每页标注章节）</span><br>
+├─ <span class="hl">&lt;名&gt;_captions.md</span>                  <span class="cmt"># 块解读（绑定 sources/ 文件名+通道）</span><br>
+├─ &lt;名&gt;_texts.md / _text_entries.json / _formulas.md / _related_filter.json<br>
+<span class="cmt">（成功即清理，无过程文件；中断保留断点续传）</span>
+</div>
+
+<h2>七、常见问题</h2>
+<table>
+<tr><th>问题</th><th>说明</th></tr>
+<tr><td>没有 Office 会怎样？</td><td>渲染降级：无块渲染图（images/ 为空）；XML/JSON/文案等其余产物正常。</td></tr>
+<tr><td>没有 API Key？</td><td>跳过对应解读/文案步骤；<code>PPTX_PASER_NO_VLM=1</code> 可跳过 VLM 全流程 0 Token。</td></tr>
+<tr><td>中途中断？</td><td>重跑同命令自动接续（state.json + doc_md5 换源检测）。</td></tr>
+<tr><td>DeepSeek 对某 XML 段空响应？</td><td>自动降级 qwen 读渲染图 → 规则模板兜底，保证每块有解读。</td></tr>
+<tr><td>如何查安装版本与文档？</td><td><code>pptx-paser --version</code>；<code>from pptx_wzq import docs</code>。</td></tr>
+</table>
+
+<h1 class="part">第二部分 · 技术分析报告</h1>
+
+<h2>1. 系统定位与核心能力</h2>
+<div class="cards">
+  <div class="card"><h4>🎯 定位</h4><p>把任意 PPT 课件解构为「多模态教学知识库」：文本/公式/图块三路抽取 + AI 解读 + 教材级文案，输出 JSON/Markdown/渲染图三件套。</p></div>
+  <div class="card"><h4>⚙️ 技术栈</h4><p>OOXML 原生解析 + DeepSeek-V4-Flash（语义/文案）+ qwen3.7-plus（VLM 兜底）+ PowerPoint COM 渲染。</p></div>
+  <div class="card"><h4>📦 交付物</h4><p>sources/ + images/ + visual_blocks.json + binding + textbook.md + captions.md。</p></div>
+</div>
+<ul>
+<li><b>图块优先</b>：组合即图块，整体保留而非拆散。</li>
+<li><b>源语言级解构</b>：grpSp 原生 XML 段、Visio 原生文件、公式 LaTeX。</li>
+<li><b>模型按块路由</b>：DeepSeek 读 XML / qwen 像素图兜底。</li>
+<li><b>教材级文案</b>：整篇自主分章分节、每页标注章节、500 字为限。</li>
+<li><b>生命周期自管</b>：成功即清理、中断续传。</li>
+</ul>
+
+<h2>2. 技术架构</h2>
+<h3>2.1 模块划分</h3>
+<table>
+<tr><th>模块</th><th>职责</th><th>Token</th></tr>
+<tr><td><code>extract_pptx_images.py</code></td><td>OOXML 原子对象提取（图片/形状/grpSp/表格/公式/图表）；XML 段原生提取；srcRect 裁剪；PowerPoint COM 渲染</td><td>0</td></tr>
+<tr><td><code>extract_texts.py</code></td><td>页面文本（in_group 标记）、表格 Markdown</td><td>0</td></tr>
+<tr><td><code>visual_blocks.py</code></td><td>单阶段确定性拆块、块渲染、语义增强、跨模态关系</td><td>DeepSeek</td></tr>
+<tr><td><code>cli_blocks.py</code></td><td>XML 段导出、rldimg 复制、caption 路由、binding、captions.md</td><td>DeepSeek+qwen</td></tr>
+<tr><td><code>cli_author.py</code></td><td>整篇分章分节文案、500 字为限、自动分批</td><td>DeepSeek</td></tr>
+<tr><td><code>cli_related.py</code></td><td>相关性过滤 + 审计</td><td>DeepSeek</td></tr>
+<tr><td><code>cli_paser.py</code></td><td>总编排、断点续传、归位、成功清理</td><td>—</td></tr>
+</table>
+<h3>2.2 命令体系</h3>
+<pre>pptx-paser / pptx-blocks / pptx-text / pptx-formula / pptx-caption
+pptx-related / pptx-author / pptx-bind / pptx-html / pptx-deck</pre>
+
+<h2>3. 工作流程（8 环节）</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#1b7fb5"/></marker></defs>
+  <g font-size="13.5" font-weight="bold" fill="#fff" text-anchor="middle">
+    <rect x="16" y="50" width="120" height="56" rx="10" fill="#0f4c81"/><text x="76" y="73">① blocks</text><text x="76" y="92" font-size="10.5" font-weight="normal">图块+解构</text>
+    <rect x="152" y="50" width="120" height="56" rx="10" fill="#0f4c81"/><text x="212" y="73">② text</text><text x="212" y="92" font-size="10.5" font-weight="normal">文本</text>
+    <rect x="288" y="50" width="120" height="56" rx="10" fill="#0f4c81"/><text x="348" y="73">③ formula</text><text x="348" y="92" font-size="10.5" font-weight="normal">公式</text>
+    <rect x="424" y="50" width="120" height="56" rx="10" fill="#1b7fb5"/><text x="484" y="73">④ caption</text><text x="484" y="92" font-size="10.5" font-weight="normal">图块解读</text>
+    <rect x="560" y="50" width="120" height="56" rx="10" fill="#0f4c81"/><text x="620" y="73">⑤ related</text><text x="620" y="92" font-size="10.5" font-weight="normal">过滤</text>
+    <rect x="696" y="50" width="120" height="56" rx="10" fill="#1b7fb5"/><text x="756" y="73">⑥ author</text><text x="756" y="92" font-size="10.5" font-weight="normal">分章文案</text>
+    <rect x="832" y="50" width="120" height="56" rx="10" fill="#0f4c81"/><text x="892" y="73">⑦ blocks_json</text><text x="892" y="92" font-size="10.5" font-weight="normal">组装+增强</text>
+    <rect x="968" y="50" width="96" height="56" rx="10" fill="#0e7a4d"/><text x="1016" y="73">⑧ 输出</text><text x="1016" y="92" font-size="10.5" font-weight="normal">归位+清理</text>
+  </g>
+  <g stroke="#1b7fb5" stroke-width="2.2" marker-end="url(#arr)">
+    <line x1="136" y1="78" x2="150" y2="78"/><line x1="272" y1="78" x2="286" y2="78"/><line x1="408" y1="78" x2="422" y2="78"/>
+    <line x1="544" y1="78" x2="558" y2="78"/><line x1="680" y1="78" x2="694" y2="78"/><line x1="816" y1="78" x2="830" y2="78"/><line x1="952" y1="78" x2="966" y2="78"/>
+  </g>
+  <text x="540" y="168" text-anchor="middle" font-size="15" font-weight="bold" fill="#0f4c81">caption 模型路由（规则 11/16）</text>
+  <g font-size="13">
+    <rect x="60" y="184" width="440" height="56" rx="10" fill="#eefaf2" stroke="#0e7a4d"/>
+    <text x="280" y="206" text-anchor="middle" font-weight="bold" fill="#0e7a4d">DeepSeek-V4-Flash · 读 sources/ XML 段</text>
+    <text x="280" y="226" text-anchor="middle" fill="#4a5a6e">grpSp/Visio/SVG-WMF · 公式转 LaTeX</text>
+    <rect x="560" y="184" width="440" height="56" rx="10" fill="#fdf0ee" stroke="#b3382c"/>
+    <text x="780" y="206" text-anchor="middle" font-weight="bold" fill="#b3382c">qwen3.7-plus · 像素图兜底</text>
+    <text x="780" y="226" text-anchor="middle" fill="#7a3a33">仅纯像素图 / DeepSeek 空响应（规则16）</text>
+  </g>
+</svg>
+<div class="cap">图 1 · 八环节流水线与模型路由</div>
+</div>
+
+<h2>4. 图块识别规则（16 条）</h2>
+<h3>4.1 识别层（1-9）——「组合即图块声明」</h3>
+<table>
+<tr><th>#</th><th>规则</th><th>实现</th></tr>
+<tr><td>1</td><td>一个 grpSp 组合即是一个图块，组合内一切内容读取为该图块内容</td><td>kind="group"，children 递归收编</td></tr>
+<tr><td>2</td><td>嵌套组合不单独提取</td><td>嵌套仅作外层 children</td></tr>
+<tr><td>3</td><td>OLE Visio/vsdx 独立成块（除非在组合内）</td><td>kind="visio" 分支</td></tr>
+<tr><td>4</td><td>非组合像素图单独成块；重叠文本并入</td><td>raster 独立块 + 重叠文本并入</td></tr>
+<tr><td>5</td><td>组合内公式作块内容；非组合公式独立提取</td><td>formula 排除 in_group</td></tr>
+<tr><td>6</td><td>首页/尾页图块舍弃</td><td>skip_cover_pages 整页跳过</td></tr>
+<tr><td>7</td><td>非组合像素图 &lt; 整页 20% 舍弃</td><td>raster_min_area_ratio=0.20</td></tr>
+<tr><td>8</td><td>表格仍读取为表格（Markdown）</td><td>表格移交 text 步骤</td></tr>
+<tr><td>9</td><td>grpSp 内 srcRect 须全程一致</td><td>children 携带 src_rect + 裁剪落盘</td></tr>
+</table>
+<h3>4.2 解构/解读层（10-16）</h3>
+<table>
+<tr><th>#</th><th>规则</th><th>实现</th></tr>
+<tr><td>10</td><td>grpSp 保留整段 XML，页标记，每组合一个独立 .xml 存 sources/</td><td>sources/slide_{页}_{块id}_grp.xml</td></tr>
+<tr><td>11</td><td>grpSp 块 caption 用 DeepSeek 读 XML；公式转 LaTeX</td><td>_ds_read_xml + 超长压缩 + 重试</td></tr>
+<tr><td>12</td><td>grpSp 块 PowerPoint 渲染 PNG 存 images/；PNG 不送 qwen</td><td>COM ExportAsFixedFormat + PyMuPDF</td></tr>
+<tr><td>13</td><td>Visio 可剥离 → .vsdx 存 sources/ + PNG 存 images/</td><td>原生剥离 + 渲染</td></tr>
+<tr><td>14</td><td>Visio 不可剥离 → XML 段，同 grpSp</td><td>sources/slide_{页}_{块id}_ole.xml</td></tr>
+<tr><td>15</td><td>SVG/WMF 同 Visio：尽量 XML 段，不行才 PNG</td><td>sources/slide_{页}_{块id}_vec.xml</td></tr>
+<tr><td>16</td><td>仅无法 DeepSeek 解读的块才送 qwen</td><td>模型路由 + 空响应降级链</td></tr>
+</table>
+
+<h2>5. 输出文档体系与内部格式</h2>
+<h3>5.1 结果目录结构</h3>
+<div class="tree">
+<span class="dir">&lt;名&gt;_result/</span><br>
+├─ <span class="dir">sources/</span>    <span class="cmt"># 图块源（解读唯一输入）：grpSp XML 段 / .vsdx / 像素图原图 / rldimg/</span><br>
+├─ <span class="dir">images/</span>     <span class="cmt"># 块渲染 PNG（PowerPoint）</span><br>
+├─ <span class="hl">&lt;名&gt;_visual_blocks.json</span>            <span class="cmt"># pptx_multimodal_slide_v2.0</span><br>
+├─ <span class="hl">&lt;名&gt;_visualBlock_text_binding.json</span> <span class="cmt"># pptx_visual_block_text_binding_v1.0</span><br>
+├─ <span class="hl">&lt;名&gt;_textbook.md</span>                  <span class="cmt"># 篇→章→节→页（每页标注章节）</span><br>
+├─ <span class="hl">&lt;名&gt;_captions.md</span>                  <span class="cmt"># 绑定 sources/ 文件名 + 通道</span><br>
+├─ &lt;名&gt;_texts.md / _text_entries.json / _formulas.md / _related_filter.json<br>
+<span class="cmt">（成功即清理，无过程文件）</span>
+</div>
+<h3>5.2 VisualBlock 内部格式</h3>
+<pre>{
+  "block_id": "blk_01", "page": 7, "block_type": "战略管理概念框架",
+  "bbox": {"x": 142.3, "y": 226.4, "w": 1026.2, "h": 400.2},
+  "assets": {"xml_source": "./sources/slide_07_blk_01_grp.xml",
+             "raster_png": null,
+             "rldimg": ["./sources/rldimg/slide_07_blk_01_image4.png", "…"]},
+  "internal_structure": {"nodes": ["…"], "edges": ["…"]},
+  "semantic_description": {
+    "block_type": "战略管理概念框架",
+    "expression_goal": "展示战略管理概念框架的核心逻辑",
+    "expression_role": "将抽象概念通过战略哲学/商道/天道/人道具象化…",
+    "expression_features": ["概念框架", "层次结构", "关系图"],
+    "vlm_caption": "该图块以“战略哲学”为中心…",
+    "teaching_use": "教学辅助图示",
+    "formula_latex": "", "caption_source": "deepseek_xml"
+  },
+  "member_obj_ids": ["…"], "vector_resources": []
+}</pre>
+
+<h2>6. 生命周期与可靠性</h2>
+<div class="cols" style="display:flex;gap:16px;flex-wrap:wrap;">
+<div class="col" style="flex:1;min-width:280px;">
+<h3>6.1 成功即清理</h3>
+<ul><li>成功后中间产物（by_page/atomic/manifest）全部删除，只留交付物。</li><li>删除失败打印警告而非静默。</li></ul>
+</div>
+<div class="col" style="flex:1;min-width:280px;">
+<h3>6.2 中断续传</h3>
+<ul><li>中断保留 work + state.json（步骤状态机）。</li><li>再运行跳过已完成、自动接续缺失；doc_md5 换源 → 全量重跑。</li></ul>
+</div>
+</div>
+
+<h2>7. 版本演进</h2>
+<table>
+<tr><th>版本</th><th>里程碑</th></tr>
+<tr><td>1.5.0</td><td>六步管线重构、三件套交付物、版本统一</td></tr>
+<tr><td>2.0.0</td><td>16 条规则落地、组合即块、XML 段导出、DeepSeek caption 路由、PowerPoint 渲染</td></tr>
+<tr><td>2.1.0</td><td>captions 绑定 sources/ + 通道标注；每页扩写 500 字</td></tr>
+<tr><td>2.2.0</td><td>textbook 500 字为限（不足扩写、超出直出整理）</td></tr>
+<tr><td>2.3.0</td><td>Author 整篇自主分章分节，每页标注章节</td></tr>
+<tr><td>2.4.0</td><td>技术分析报告（html/pdf/md）随安装包分发</td></tr>
+<tr><td>2.5.0</td><td>使用手册+技术分析合并文档、README 全量更新</td></tr>
+</table>
+
+<div class="note good"><b>附注</b>：本手册与技术分析的所有字段与格式均来自 pptx-wzq 真实产物（visual_blocks.json / binding / textbook.md / captions.md / sources/），非虚构。</div>
+
+</div>
+<footer>pptx-wzq 2.5.0 · 使用手册与技术分析 · 作者：吴振谦 · 本文档随安装包分发（from pptx_wzq import docs）</footer>
+</body>
+</html>
