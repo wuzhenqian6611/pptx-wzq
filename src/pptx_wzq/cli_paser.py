@@ -483,11 +483,15 @@ def _exec_step(step: str, args, work: Path, stem: str,
             else:
                 au += ["--pages", "0"]   # 无缺失页：空跑保持已完成
         _run_step(
-            "教材文案生成（500 字为限：不足扩写、超出直出整理）", "cli_author", au, ".",
+            "教材文案生成（整篇自主分章分节，每页标注章节，500 字为限）",
+            "cli_author", au, ".",
             desc="学科自动推断 → 文本/公式/可视逻辑块解读三份文档输入 DeepSeek "
-                 "deepseek-v4-flash 逐页撰写教材文案：**原文 ≤ 500 字 → 扩写到 "
-                 "不少于 500 字；原文 > 500 字 → 直出整理（轻度整理、不改原意、"
-                 "尽量不增字数）**（v2.2 规则）→ <名>_textbook.md；超长自动分批",
+                 "deepseek-v4-flash：把整个 PPT 视为**一部完整教材**，**自主划分"
+                 "若干章（# 第X章 章名）→ 每章若干节（## 第X节 节名，一节可含"
+                 "多页）→ 每页小节（## 第 N 页）**，每页内容首行标注所属章节；"
+                 "原文 ≤ 500 字 → 扩写至不少于 500 字；> 500 字 → 直出整理"
+                 "（不改原意、不增字数）→ <名>_textbook.md；超长自动分批"
+                 "（跨批章节命名延续）",
             resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
             outs=[work], idx=idx, total=total)
     elif step == "blocks_json":

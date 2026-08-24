@@ -196,9 +196,18 @@ SYSTEM_PROMPT_TMPL = (
     "你是高校教材建设专家、高级人工智能多模态知识库工程师、"
     "和{subject}专业资深教师，现给你输入三个md文档，一个是从PPT中提取的"
     "文本文档，一个是从PPT中提取的公式文档，一个是从PPT中提取的图片的"
-    "解释文档，每个文档都标有页码。请根据这些文档，系统性撰写每一页PPT"
-    "相关知识点的教材描述文案，一页PPT一个文案（不少于500字），用教材口吻"
-    "描述，讲究知识描述的逻辑性和阅读的流畅性。并将结果形成完整的md文档。"
+    "解释文档，每个文档都标有页码。请根据这些文档，把整个PPT视为一部"
+    "**完整的教材（一篇）**，系统性撰写每一页PPT相关知识点的教材描述文案。\n"
+    "**篇章结构要求（v2.3）**：\n"
+    "1. 根据全部页面内容**自主划分若干章**（章标题用 `# 第X章 章名`，"
+    "如 `# 第1章 战略管理概述`），每章再**自主划分为若干节**"
+    "（节标题用 `## 第X节 节名`，如 `## 第1节 战略的概念与本质`）；\n"
+    "2. **一节可以包含一页或多页PPT**（同节的多页归入同一节）；\n"
+    "3. **每一页**的内容（`## 第 N 页` 小节下）**第一行必须标注该页所属的"
+    "「章名 · 节名」**，格式：`> 所属章节：第X章 章名 · 第X节 节名`；\n"
+    "4. 每页文案**不少于500字**，用教材口吻描述，讲究知识描述的逻辑性和"
+    "阅读的流畅性；跨批（分批生成）时章节命名保持前后一致、延续。\n"
+    "将结果形成完整的md文档。"
 )
 
 
@@ -255,9 +264,16 @@ def _infer_subject_llm(client, texts_path: Path, model: str,
     return _infer_subject(all_text)
 
 
-def _build_full_prompt(by_page: dict, target: list, subject: str) -> str:
-    """把目标页的三源内容按页拼接为整份 user 内容（含页码结构）。"""
+def _build_full_prompt(by_page: dict, target: list, subject: str,
+                       batch_ctx: str = "") -> str:
+    """把目标页的三源内容按页拼接为整份 user 内容（含页码结构）。
+
+    batch_ctx：批次上下文说明（如"本批为全篇第 X~Y 页，章节命名须与
+    前批保持一致并延续"），v2.3 整体成篇时保证章节连贯。"""
     lines = [f"学科：{subject}", ""]
+    if batch_ctx:
+        lines.append(batch_ctx)
+        lines.append("")
     for p in target:
         data = by_page[p]
         lines.append(f"## 第 {p} 页")
@@ -286,16 +302,18 @@ def _gen_textbook(client, full_prompt: str, subject: str,
         {"role": "system", "content":
          SYSTEM_PROMPT_TMPL.format(subject=subject)
          + " 请直接输出完整的教材文案 markdown 文档："
-           "包含每一页（以 ## 第 N 页 为节标题）的教材描述文案，"
-           "一页一个文案（不少于 500 字），教材口吻、逻辑连贯、阅读流畅；"
+           "整篇分章（# 第X章 章名）→ 分节（## 第X节 节名，一节可含多页）"
+           "→ 每页小节（## 第 N 页），每页内容首行标注 `> 所属章节："
+           "第X章 章名 · 第X节 节名`，每页文案不少于 500 字；"
            "所有公式以 LaTeX 原样保留，图片解读内容自然融入对应页文案；"
            "不得遗漏任何一页、任何公式，不得输出文档以外的多余说明。"},
         {"role": "user", "content":
          full_prompt
          + "\n\n请根据以上三个 md 文档（文本/公式/图片解读，均标有页码），"
-           "系统性撰写每一页 PPT 相关知识点的教材描述文案，"
-           "一页 PPT 一个文案（不少于 500 字），用教材口吻描述，"
-           "讲究知识描述的逻辑性和阅读的流畅性。"
+           "把整个 PPT 视为一部完整教材，自主划分为若干章、每章若干节"
+           "（自主命名），一节可包含一页或多页；逐页撰写教材描述文案"
+           "（每页不少于 500 字），每页内容首行标注所属章节"
+           "（`> 所属章节：第X章 章名 · 第X节 节名`），教材口吻、逻辑连贯。"
            "直接输出完整的 markdown 文档。"},
     ]
     last_err = None
@@ -423,7 +441,14 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                     on_progress(bi, n_batches, {"kind": "author"})
                 except Exception:
                     pass
-            full_prompt = _build_full_prompt(by_page, batch, subject)
+            # v2.3 整体成篇：批次上下文——告知这是全篇的第 X~Y 页，
+            # 章节命名须与前批保持一致并延续（一节可跨批含多页）
+            batch_ctx = (f"（本批为整篇教材的第 {batch[0]}~{batch[-1]} 页"
+                         f"（共 {len(target)} 页中的一批）；"
+                         f"章节划分须与之前批次保持一致并延续，"
+                         f"不要重新命名已有章节。）")
+            full_prompt = _build_full_prompt(by_page, batch, subject,
+                                             batch_ctx=batch_ctx)
             print(f"[批次 {bi}/{n_batches}] 页 {batch[0]}~{batch[-1]}"
                   f"（{len(batch)} 页，输入约 {len(full_prompt)} 字符）",
                   file=sys.stderr)
@@ -451,10 +476,14 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
     # 统一按页序写盘（直出页与模型页混合时顺序一致）
     header = (f"# {out_path.stem} 教材文案\n\n"
               f"> 由 `pptx-author` 生成 · 模型 `{model}` · 学科：{subject}\n"
-              f"> 依据：文本/公式/图片解读三份 PPT 提取文档，共 {len(target)} 页"
-              + (f"，其中 {len(direct)} 页原文直出" if direct else "")
-              + (f"，分 {n_batches} 批生成" if n_batches > 1 else "")
-              + "。\n\n")
+              f"> 依据：文本/公式/图片解读三份 PPT 提取文档，共 {len(target)} 页\n"
+              f"> 结构：整篇教材由模型**自主划分章（# 第X章 章名）/ 节"
+              f"（## 第X节 节名）**，一节可含多页；每页内容首行标注所属章节\n"
+              + (f"> 其中 {len(direct)} 页原文超 500 字直出整理"
+                 f"（未参与自主分章）\n" if direct else "")
+              + (f"> 分 {n_batches} 批生成（跨批章节命名延续）\n"
+                 if n_batches > 1 else "")
+              + "\n")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(header)
         for p in target:
