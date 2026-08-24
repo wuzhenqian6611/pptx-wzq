@@ -679,6 +679,10 @@ def _main(argv=None) -> int:
                     help="v2.0 规则 11/16：按 sources/ 文件顺序解读——"
                          ".xml → DeepSeek 读 XML（公式转 LaTeX）；"
                          ".png 像素图原图 → qwen VLM 兜底；images/ 不解读")
+    ap.add_argument("--skip-render", action="store_true",
+                    help="v2.5.2：跳过块渲染段（不清空、不重建 images/）——"
+                         "caption/blocks_json 等消费步骤用，images/ 只由"
+                         "blocks 结构步骤生成，避免冗余渲染或误清空")
     ap.add_argument("--json", action="store_true",
                     help="把统计输出到 stdout")
     ap.add_argument("--version", action="version", version=VERSION)
@@ -733,11 +737,11 @@ def _main(argv=None) -> int:
     image_dir = out_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     n_rendered = 0
-    if not args.caption_sources:
+    if not (args.caption_sources or args.skip_render):
         # 结构阶段（blocks 步骤）才清空旧块渲染图并重建：
-        # caption 步骤（--caption-sources，cli_paser ④）只消费 sources/ 做解读，
-        # **不得碰 images/**——否则会把 blocks 步骤已生成的渲染图清空且不重建
-        # （若本次渲染失败则 images/ 永久为空；实测隐患）
+        # caption 步骤（--caption-sources）与 blocks_json 步骤（--skip-render）
+        # 只消费/组装，**不得碰 images/**——否则会把 blocks 步骤已生成的渲染图
+        # 清空且不重建（若本次渲染失败则 images/ 永久为空；实测隐患）
         for old in image_dir.glob("slide_*_blk_*.png"):
             try:
                 old.unlink()

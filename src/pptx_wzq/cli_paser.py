@@ -445,6 +445,7 @@ def _exec_step(step: str, args, work: Path, stem: str,
                "-o", work / "blocks" / f"{stem}_visual_blocks.json",
                "--captions", work / "blocks" / "captions.md",
                "--caption-sources",
+               "--skip-render",   # v2.5.2：不碰 images/（blocks 步骤已渲染）
                "--semantic-model", "deepseek-v4-flash"]
         if action == "resume":
             cap.append("--resume")
@@ -503,6 +504,7 @@ def _exec_step(step: str, args, work: Path, stem: str,
               "--prev-blocks", work / "blocks" / f"{stem}_visual_blocks.json",
               "-o", work.parent / f"{stem}_visual_blocks.json",
               "--captions", work.parent / f"{stem}_captions.md",
+              "--skip-render",   # v2.5.2：不碰 images/（blocks 步骤已渲染）
               # DeepSeek 语义增强：本步骤用文本模型生成每个可视逻辑块的
               # semantic_description（expression_goal/role/features/…）
               "--semantic-model", "deepseek-v4-flash"]
