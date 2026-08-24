@@ -1061,20 +1061,38 @@ def _count_pptx_slides(pptx_path: str) -> int:
 _COM_RENDER_SCRIPT = r"""
 import sys
 import win32com.client
-app = win32com.client.Dispatch("PowerPoint.Application")
-pres = app.Presentations.Open(sys.argv[1], ReadOnly=True, Untitled=False,
-                              WithWindow=False)
+# DispatchEx：创建**独立** PowerPoint COM 实例（PowerPoint 是单实例应用，
+# Dispatch 会连接到用户正在使用的实例；若该文件正被用户 PowerPoint 编辑，
+# Open 会失败并报 0x80070002 文件不可用）。独立实例互不干扰。
+app = win32com.client.DispatchEx("PowerPoint.Application")
 try:
-    # ExportAsFixedFormat 完整参数：
-    # (Path, FixedFormatType=2=PDF, Intent=1=Screen, FrameSlides=False,
-    #  HandoutOrder=1, OutputType=1=Slides, PrintHiddenSlides=True,
-    #  PrintRange=None, RangeType=1=All, SlideShowName="",
-    #  IncludeDocProperties=False, KeepIRMSettings=False,
-    #  DocStructureTags=True, BitmapMissingFonts=False, UseISO19005_1=False)
-    pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True, None, 1,
-                             "", False, False, True, False, False)
+    try:
+        pres = app.Presentations.Open(sys.argv[1], ReadOnly=True,
+                                      Untitled=False, WithWindow=False)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        # 0x80070002 = ERROR_FILE_NOT_FOUND：文件被占用/不可用最常见
+        if "0x80070002" in err or "80070002" in err:
+            print("[OPEN_FAIL] 文件不可用（0x80070002）：很可能该 PPT 正被"
+                  " PowerPoint 打开编辑，请先关闭它再运行；或路径错误。",
+                  file=sys.stderr)
+        else:
+            print(f"[OPEN_FAIL] 打开失败：{e}", file=sys.stderr)
+        print(err[-600:], file=sys.stderr)
+        raise
+    try:
+        # ExportAsFixedFormat 完整参数：
+        # (Path, FixedFormatType=2=PDF, Intent=1=Screen, FrameSlides=False,
+        #  HandoutOrder=1, OutputType=1=Slides, PrintHiddenSlides=True,
+        #  PrintRange=None, RangeType=1=All, SlideShowName="",
+        #  IncludeDocProperties=False, KeepIRMSettings=False,
+        #  DocStructureTags=True, BitmapMissingFonts=False, UseISO19005_1=False)
+        pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True, None, 1,
+                                 "", False, False, True, False, False)
+    finally:
+        pres.Close()
 finally:
-    pres.Close()
     app.Quit()
 """
 
