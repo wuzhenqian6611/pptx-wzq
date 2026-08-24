@@ -70,11 +70,21 @@ def _load_formulas(formulas_path: Path) -> dict:
 
 
 def _write_captions(captions_path: Path, slides: list, model: str) -> int:
-    """把每页每块写成 captions.md（条目对象=单块），返回块数。"""
+    """把每页每块写成 captions.md（条目对象=单块），返回块数。
+
+    v2.1：每条解读**绑定 sources/ 源文件**（xml_source 优先，raster_png
+    兜底；无源则回退 images/ PNG 并标注），并标注实际解读通道
+    （DeepSeek-XML / qwen-VLM / 规则兜底）。"""
     n = 0
-    lines = ["# images 图片 AI 解读（可视逻辑块级）", "",
-             f"> 由 `pptx-blocks` 生成 · 模型 `{model}` · "
-             f"每块一条；块渲染图见 images/ 目录。", ""]
+    lines = ["# 可视逻辑块 AI 解读（块级）", "",
+             "> 由 `pptx-blocks` 生成 · 按 `sources/` 源文件逐一解读 · "
+             "XML 段 → DeepSeek-V4-Flash（组内公式转 LaTeX）；"
+             "像素图 → qwen3.7-plus 兜底。", ""]
+    channel_label = {
+        "deepseek_xml": "DeepSeek-V4-Flash 读 XML",
+        "qwen_vlm": "qwen3.7-plus 读图",
+        "rule_fallback": "规则模板兜底",
+    }
     for s in slides:
         page = (s.get("slide_info") or {}).get("slide_index",
                                                s.get("page", 0))
@@ -83,8 +93,14 @@ def _write_captions(captions_path: Path, slides: list, model: str) -> int:
         lines.append("")
         for bi, blk in enumerate(blocks, start=1):
             n += 1
-            img_name = f"slide_{page:02d}_{blk['block_id']}.png"
+            a = blk.get("assets") or {}
+            src_name = (a.get("xml_source") or a.get("raster_png")
+                        or "").replace("./sources/", "")
+            if not src_name:
+                src_name = f"slide_{page:02d}_{blk['block_id']}.png（images/）"
             sd = blk.get("semantic_description") or {}
+            chan = sd.get("caption_source") or "rule_fallback"
+            chan_txt = channel_label.get(chan, chan)
             goal = sd.get("expression_goal", "")
             role = sd.get("expression_role", "")
             cap = sd.get("vlm_caption") or ""
@@ -93,7 +109,8 @@ def _write_captions(captions_path: Path, slides: list, model: str) -> int:
             latex = sd.get("formula_latex") or ""
             feat = "、".join(sd.get("expression_features") or [])
             use = sd.get("teaching_use", "")
-            lines.append(f"### IMG{n:04d} — `{img_name}`  ✅")
+            lines.append(f"### IMG{n:04d} — `{src_name}`  ✅")
+            lines.append(f"（解读通道：{chan_txt}）")
             lines.append("")
             lines.append(f"**块类型**：{blk.get('block_type')}。")
             if goal:

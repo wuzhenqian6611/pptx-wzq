@@ -483,11 +483,10 @@ def _exec_step(step: str, args, work: Path, stem: str,
             else:
                 au += ["--pages", "0"]   # 无缺失页：空跑保持已完成
         _run_step(
-            "教材文案生成（原文超 300 字直出）", "cli_author", au, ".",
+            "教材文案生成（每页扩写至不少于 500 字）", "cli_author", au, ".",
             desc="学科自动推断 → 文本/公式/可视逻辑块解读三份文档输入 DeepSeek "
-                 "deepseek-v4-flash 逐页生成教材文案；某页原文去空白超过 "
-                 "--no-expand-threshold（默认 300）字时直接提取原文、不调用"
-                 "模型 → <名>_textbook.md；超长自动分批",
+                 "deepseek-v4-flash **逐页扩写教材文案，每页不少于 500 字**"
+                 "（v2.1 起默认关闭原文直出）→ <名>_textbook.md；超长自动分批",
             resource="消耗 Token（文本模型 deepseek-v4-flash，DEEPSEEK_API_KEY）",
             outs=[work], idx=idx, total=total)
     elif step == "blocks_json":

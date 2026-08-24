@@ -50,7 +50,7 @@ VERSION = "pptx-author 1.2.0 (方案B薄壳)"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_KEY_ENV = "DEEPSEEK_API_KEY"
-MIN_CHARS = 300
+MIN_CHARS = 500  # 每页教材文案目标字数下限（v2.1：每页至少扩写到 500 字）
 
 # 学科关键词表（自动推断用；--subject 可覆盖）
 SUBJECT_KEYWORDS = {
@@ -197,7 +197,7 @@ SYSTEM_PROMPT_TMPL = (
     "和{subject}专业资深教师，现给你输入三个md文档，一个是从PPT中提取的"
     "文本文档，一个是从PPT中提取的公式文档，一个是从PPT中提取的图片的"
     "解释文档，每个文档都标有页码。请根据这些文档，系统性撰写每一页PPT"
-    "相关知识点的教材描述文案，一页PPT一个文案（300字以上），用教材口吻"
+    "相关知识点的教材描述文案，一页PPT一个文案（不少于500字），用教材口吻"
     "描述，讲究知识描述的逻辑性和阅读的流畅性。并将结果形成完整的md文档。"
 )
 
@@ -287,14 +287,14 @@ def _gen_textbook(client, full_prompt: str, subject: str,
          SYSTEM_PROMPT_TMPL.format(subject=subject)
          + " 请直接输出完整的教材文案 markdown 文档："
            "包含每一页（以 ## 第 N 页 为节标题）的教材描述文案，"
-           "一页一个文案（300 字以上），教材口吻、逻辑连贯、阅读流畅；"
+           "一页一个文案（不少于 500 字），教材口吻、逻辑连贯、阅读流畅；"
            "所有公式以 LaTeX 原样保留，图片解读内容自然融入对应页文案；"
            "不得遗漏任何一页、任何公式，不得输出文档以外的多余说明。"},
         {"role": "user", "content":
          full_prompt
          + "\n\n请根据以上三个 md 文档（文本/公式/图片解读，均标有页码），"
            "系统性撰写每一页 PPT 相关知识点的教材描述文案，"
-           "一页 PPT 一个文案（300 字以上），用教材口吻描述，"
+           "一页 PPT 一个文案（不少于 500 字），用教材口吻描述，"
            "讲究知识描述的逻辑性和阅读的流畅性。"
            "直接输出完整的 markdown 文档。"},
     ]
@@ -522,10 +522,11 @@ def _main(argv=None) -> int:
                     default=DEFAULT_MAX_OUTPUT_CHARS,
                     help=f"单批估算输出字符上限（默认 {DEFAULT_MAX_OUTPUT_CHARS}；"
                          f"按每页600字折算页数上限）")
-    ap.add_argument("--no-expand-threshold", type=int, default=300,
+    ap.add_argument("--no-expand-threshold", type=int, default=0,
                     help="原文直出阈值：某页原始文本（去空白）超过该字数时"
-                         "不调用模型扩写，直接以原文作为教材文案（默认 300；"
-                         "0 关闭直出，全部走模型）")
+                         "不调用模型扩写，直接以原文作为教材文案（默认 0："
+                         "关闭直出，**每页一律由模型扩写到不少于 500 字**；"
+                         "如需省 Token 可设 300+）")
     ap.add_argument("--json", action="store_true",
                     help="结构化统计输出到 stdout")
     ap.add_argument("--version", action="version", version=VERSION)
