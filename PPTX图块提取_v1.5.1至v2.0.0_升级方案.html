@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPTX 图块提取管线 v1.5.1 → v2.0.0 升级方案 · 多模态知识库</title>
+<style>
+  :root{
+    --ink:#1a2332; --sub:#4a5a6e; --line:#d7dee8;
+    --bg:#ffffff; --panel:#f5f7fa; --accent:#0f4c81; --accent2:#1b7fb5;
+    --warn:#b45309; --ok:#0e7a4d; --bad:#b3382c; --soft:#eef3f8;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:"SimSun","宋体",serif; color:var(--ink); background:var(--bg);
+    line-height:1.75; font-size:17px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 28px 80px;}
+  /* ---------- 封面 ---------- */
+  .hero{
+    background:linear-gradient(135deg,#0f4c81 0%,#1b7fb5 60%,#3aa0d6 100%);
+    color:#fff; padding:64px 28px 48px; text-align:center; position:relative; overflow:hidden;
+  }
+  .hero::after{content:""; position:absolute; right:-80px; top:-80px; width:320px; height:320px;
+    border:26px solid rgba(255,255,255,.08); border-radius:50%;}
+  .hero .tag{display:inline-block; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.45);
+    padding:4px 18px; border-radius:999px; font-size:15px; letter-spacing:2px; margin-bottom:18px;}
+  .hero h1{font-size:40px; font-weight:700; letter-spacing:3px; margin-bottom:10px;}
+  .hero .sub{font-size:19px; opacity:.92; letter-spacing:1px;}
+  .hero .meta{margin-top:22px; font-size:14px; opacity:.75;}
+  /* ---------- 章节 ---------- */
+  section{margin-top:54px;}
+  .sec-title{display:flex; align-items:center; gap:12px; border-bottom:3px solid var(--accent);
+    padding-bottom:8px; margin-bottom:22px;}
+  .sec-title .no{background:var(--accent); color:#fff; width:38px; height:38px; border-radius:8px;
+    display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:700; flex:0 0 auto;}
+  .sec-title h2{font-size:26px; font-weight:700; letter-spacing:1px;}
+  .sec-title .en{color:var(--sub); font-size:13px; margin-left:auto; letter-spacing:1px;}
+  h3{font-size:20px; margin:26px 0 12px; color:var(--accent);}
+  h4{font-size:18px; margin:18px 0 8px;}
+  p{margin:8px 0;}
+  .lead{font-size:17px; color:var(--sub);}
+  /* ---------- 卡片 ---------- */
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-top:14px;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px;}
+  .card h4{margin:0 0 6px; color:var(--accent); font-size:17px;}
+  .card p{font-size:15px; color:var(--sub); margin:0;}
+  /* ---------- 表格 ---------- */
+  table{width:100%; border-collapse:collapse; margin:12px 0 6px; font-size:15px; background:#fff;}
+  th{background:var(--soft); color:var(--accent); font-weight:700; text-align:left; padding:9px 12px;
+    border:1px solid var(--line); white-space:nowrap;}
+  td{padding:8px 12px; border:1px solid var(--line); vertical-align:top;}
+  tr:nth-child(even) td{background:#fafbfd;}
+  .mono{font-family:"Consolas","Courier New",monospace; font-size:13.5px; color:#0b3d6e;
+    background:#eef4fb; padding:1px 6px; border-radius:4px; word-break:break-all;}
+  /* ---------- 提示框 ---------- */
+  .note{border-left:4px solid var(--accent2); background:var(--soft); padding:12px 16px;
+    border-radius:0 8px 8px 0; margin:14px 0; font-size:15px;}
+  .warn{border-left-color:var(--warn); background:#fdf6ec;}
+  .good{border-left-color:var(--ok); background:#eef8f2;}
+  .bad{border-left-color:var(--bad); background:#fdf0ee;}
+  .badge{display:inline-block; font-size:13px; padding:1px 10px; border-radius:999px; font-weight:700;}
+  .b-new{background:#dceef8; color:#0f4c81;}
+  .b-keep{background:#e9f5ee; color:#0e7a4d;}
+  .b-rm{background:#fbe4e1; color:#b3382c;}
+  /* ---------- SVG 流程图 ---------- */
+  .fig{background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px 10px 10px;
+    margin:16px 0; box-shadow:0 2px 10px rgba(15,76,129,.06);}
+  .fig .cap{text-align:center; font-size:15px; color:var(--sub); margin-top:8px;}
+  svg text{font-family:"SimSun","宋体",serif;}
+  /* ---------- 目录树 ---------- */
+  .tree{background:#0f2438; color:#d8e6f4; border-radius:10px; padding:18px 22px;
+    font-family:"Consolas","Courier New",monospace; font-size:14.5px; line-height:1.9; overflow-x:auto;}
+  .tree .dir{color:#7fd0ff; font-weight:700;}
+  .tree .hl{color:#ffd479;}
+  .tree .cmt{color:#7f95ab;}
+  /* ---------- 对比 ---------- */
+  .vs{display:grid; grid-template-columns:1fr 60px 1fr; gap:10px; align-items:stretch; margin:14px 0;}
+  .vs .col{border:1px solid var(--line); border-radius:10px; padding:14px 16px;}
+  .vs .old{background:#fdf6f5;}
+  .vs .new{background:#eef7f2;}
+  .vs .arrow{display:flex; align-items:center; justify-content:center; font-size:26px; color:var(--accent); font-weight:700;}
+  .vs h4{text-align:center; margin-bottom:8px; font-size:16px;}
+  .vs ul{padding-left:18px; font-size:14.5px; color:var(--sub);}
+  .vs li{margin:5px 0;}
+  /* ---------- 步骤 ---------- */
+  .steps{counter-reset:st; margin:14px 0;}
+  .step{display:flex; gap:14px; margin:10px 0; align-items:flex-start;}
+  .step .n{flex:0 0 34px; height:34px; border-radius:50%; background:var(--accent); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:700; counter-increment:st; font-size:15px;}
+  .step .b{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; flex:1;}
+  .step .b b{color:var(--accent);}
+  .step .b code{font-family:"Consolas",monospace; font-size:13px; background:#e8eff8; padding:1px 5px; border-radius:4px;}
+  /* ---------- 打印 ---------- */
+  @media print{
+    body{font-size:13px;}
+    .hero{padding:30px 20px;}
+    .hero h1{font-size:26px;}
+    .cards{grid-template-columns:repeat(3,1fr);}
+    .fig{page-break-inside:avoid;}
+    section{page-break-inside:avoid;}
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="tag">PPTX 智能解构 · 多模态知识库管线</div>
+  <h1>图块提取管线升级方案</h1>
+  <div class="sub">v1.5.1（现状分析） → v2.0.0（规则驱动重构）</div>
+  <div class="meta">pptx-wzq · 16 条定稿规则 · 组合即图块 · XML 优先 · 模型按块路由</div>
+</div>
+
+<div class="wrap">
+
+<!-- ================= 摘要 ================= -->
+<section>
+  <div class="sec-title"><div class="no">0</div><h2>摘要</h2><div class="en">Executive Summary</div></div>
+  <p class="lead">图块提取失败的根因**不在聚类算法，而在上游数据层**：组合形状（grpSp）被暴力拆散、组内坐标未变换，导致图块错位残缺；文本墙规则误伤叠加在图形上的文字；Visio 对象在原子对象阶段被静默丢弃。</p>
+  <div class="cards">
+    <div class="card"><h4>🎯 定稿规则 16 条</h4><p>识别层 1–9（组合即块、非组合按类型确定性处理）+ 解构解读层 10–16（XML 优先、DeepSeek 读 XML、qwen VLM 兜底）。</p></div>
+    <div class="card"><h4>🔀 核心转变</h4><p>流程重构：<b>blocks 先行 → text/formula → AI 解读 → 过滤 → 扩写 → 绑定 → 输出</b>；解读只按顺序读 sources/，images/ 仅供阅览；组内公式由 DeepSeek 转 LaTeX。</p></div>
+    <div class="card"><h4>📦 交付物与生命周期</h4><p>sources/（XML 段、.vsdx、矢量源、<b>像素图原图</b>）+ images/（渲染阅览图）+ JSON/MD 三件套；<b>成功即清理过程文件，中断保留并自动接续</b>。</p></div>
+  </div>
+</section>
+
+<!-- ================= 1. 现状分析 ================= -->
+<section>
+  <div class="sec-title"><div class="no">1</div><h2>v1.5.1 现状分析</h2><div class="en">As-Is Analysis</div></div>
+
+  <h3>1.1 问题现象</h3>
+  <table>
+    <tr><th style="width:160px">现象</th><th>说明</th></tr>
+    <tr><td>图块不完整</td><td>用 PPT 自带工具（插入→组合/形状）画的图，只提取出图片部分，图块上方的文字（实为图块内容）未进图块。</td></tr>
+    <tr><td>文字变纯文本</td><td>图块内文字被当作页面正文（textbook.md / texts.md 的纯文本条目），而非图块内容。</td></tr>
+    <tr><td>位置错乱</td><td>组内元素坐标未叠加组合偏移，块 bbox 起点在页面左上角 (0,0)，与真实位置相差一个组合偏移。</td></tr>
+    <tr><td>Visio 静默丢失</td><td>_collect_atomic_objects 无 visio 分支，Visio 记录在原子对象阶段被丢弃，不进任何块。</td></tr>
+  </table>
+
+  <h3>1.2 根因定位（代码级）</h3>
+  <table>
+    <tr><th style="width:60px">根因</th><th style="width:260px">问题</th><th>代码位置</th></tr>
+    <tr><td><b>A</b></td><td>grpSp 被暴力拆散、组内坐标未变换</td>
+      <td><span class="mono">extract_pptx_images._find_xfrm / _xfrm_xy</span> 只取元素自身 <span class="mono">&lt;a:off&gt;</span>，未叠加组合偏移；<span class="mono">iter_pictures / iter_native_shapes</span> 用 <span class="mono">root.iter()</span> 递归把组内元素当顶层对象</td></tr>
+    <tr><td><b>B</b></td><td>组内文字被当页面正文</td>
+      <td><span class="mono">extract_texts._iter_slide_texts</span> 递归进 grpSp，图块标签文字被提取为 TXT 条目进入 textbook</td></tr>
+    <tr><td><b>C</b></td><td>文本墙误伤叠图文字</td>
+      <td><span class="mono">visual_blocks.extract_blocks</span> 用 <span class="mono">max_shape_text=10</span> 把超长文本框整体剔除，叠在图形上的大段说明文字全部丢失</td></tr>
+    <tr><td><b>D</b></td><td>cli_blocks 自举失效 + 过期提示</td>
+      <td><span class="mono">cli_blocks</span> 缺 atomic_objects.json 时提示"请先运行 pptx-img"（该命令已下线）</td></tr>
+    <tr><td><b>E</b></td><td>旋转组合逐元素变换复杂</td>
+      <td>组合可带 rot（如 60°），逐元素绝对坐标需旋转矩阵，易错 → 以"组合整体成块 + XML 段保留原生结构"规避</td></tr>
+    <tr><td><b>F</b></td><td>Visio 记录不生成原子对象</td>
+      <td><span class="mono">_collect_atomic_objects</span> 只有 picture/chart/formula 分支，<b>缺 visio 分支</b>；_emit_visio 产出的 <span class="mono">kind="visio"</span> 记录被静默丢弃</td></tr>
+  </table>
+  <div class="note bad"><b>结论</b>：1.5.1 对「组合绘制」的课件图块无效——坐标错位导致聚类错乱、组内文字散失、Visio 不进块。这恰好是 16 条规则要系统解决的。</div>
+</section>
+
+<!-- ================= 2. 规则体系 ================= -->
+<section>
+  <div class="sec-title"><div class="no">2</div><h2>定稿规则体系（16 条）</h2><div class="en">Rule Set</div></div>
+
+  <h3>2.1 图块识别规则（1–9）</h3>
+  <table>
+    <tr><th style="width:70px">#</th><th>规则</th><th style="width:300px">一句话解读</th></tr>
+    <tr><td><b>1</b></td><td>一个 grpSp 组合即是一个图块，组合内所有内容（文字/图片/公式/OLE）都是该图块内容</td><td>组合 = 块的最高优先级容器，整体不可拆</td></tr>
+    <tr><td><b>2</b></td><td>嵌套在另一个 grpSp 中的组合，不单独提取</td><td>嵌套组合 = 外层图块的子结构</td></tr>
+    <tr><td><b>3</b></td><td>OLE Visio/vsdx → 单独一个图块（除非在 grpSp 内）</td><td>Visio 工程图本身即完整图块</td></tr>
+    <tr><td><b>4</b></td><td>像素图若不在 grpSp 中 → 单独提取为一个图块</td><td>每张位图独立可预期；重叠文字并入该块</td></tr>
+    <tr><td><b>5</b></td><td>公式在 grpSp 中 → 块内容；否则单独提取为公式</td><td>公式归属由"是否在组合内"决定</td></tr>
+    <tr><td><b>6</b></td><td>第一页（题目页）与最后一页（致谢页）图块/像素图舍弃</td><td>封面封底不产图块；文本/公式仍提取</td></tr>
+    <tr><td><b>7</b></td><td>非 grpSp 像素图面积 &lt; 整页 20% → 舍弃</td><td>小装饰图标不进块</td></tr>
+    <tr><td><b>8</b></td><td>表格在 text 文本提取阶段按表格读取，输出 Markdown 表格文本（不参与图块生成）</td><td>texts.md 输出 Markdown 表格；组合内表格随 XML 段保留</td></tr>
+    <tr><td><b>9</b></td><td>grpSp 内 srcRect（图片裁剪显示区域）处理须保留一致</td><td>元数据/资源/渲染/描述全程一致</td></tr>
+  </table>
+  <p class="lead" style="margin-top:8px">识别优先级：<b>grpSp &gt; Visio &gt; 像素图（≥20%）&gt; 矢量（SVG/WMF）</b>——blocks 只产确定性图块（无自由聚类）；<b>shape/connector 不单独成块</b>（文本走 text 阶段、箭头随组合或忽略）；<b>表格移交 text 阶段</b>；公式不参与块；首页/尾页整页跳过。</p>
+
+  <h3>2.2 图块解构与解读规则（10–16）</h3>
+  <table>
+    <tr><th style="width:70px">#</th><th>规则</th><th style="width:300px">一句话解读</th></tr>
+    <tr><td><b>10</b></td><td>grpSp 组合块保留整个组合 XML 代码段，页面序号标记；<b>每组合一个独立 *.xml 文件</b>存 sources/</td><td>组合的源语言表达，一组合一文件</td></tr>
+    <tr><td><b>11</b></td><td>grpSp 块 caption 用 <b>DeepSeek-V4-Flash 直接读 XML 段</b>；组内公式 → DeepSeek 转 LaTeX 融入 caption</td><td>文本模型读 XML，公式转 LaTeX</td></tr>
+    <tr><td><b>12</b></td><td>grpSp 块解构调用 <b>PowerPoint 渲染 PNG</b> 存 images/；caption 不把 PNG 送 qwen3.7-plus</td><td>渲染产物 ≠ 解读输入</td></tr>
+    <tr><td><b>13</b></td><td>Visio/vsdx 可剥离 → .vsdx 存 sources/ + 渲染 PNG 存 images/</td><td>可编辑原生源 + 可视渲染双产物</td></tr>
+    <tr><td><b>14</b></td><td>Visio 不可剥离 → 存 XML 代码段，处理与 grpSp 一致</td><td>退化路径：XML 兜底</td></tr>
+    <tr><td><b>15</b></td><td>SVG/WMF 等矢量 → 同 Visio：尽量 XML 段，不行才 PNG</td><td>矢量优先 XML，栅格化兜底</td></tr>
+    <tr><td><b>16</b></td><td><b>只有</b>无法用 DeepSeek 解读 XML 的块（纯像素图）才送 qwen3.7-plus VLM</td><td>解读模型按块路由，VLM 兜底</td></tr>
+  </table>
+  <div class="note good"><b>解读通道路由</b>：grpSp / Visio-XML / SVG-WMF 矢量 → <b>DeepSeek-V4-Flash（读 XML 段，公式转 LaTeX）</b>；纯像素图 / 无 XML 可读的块 → <b>qwen3.7-plus（读 PNG）</b>。</div>
+  <div class="note"><b>公式归宿（规则 5，四环节接力）</b>：组合内公式<b>不进入 formula 步骤的输出</b>——<b>① blocks</b> 随组合保留原始 <span class="mono">&lt;m:oMath&gt;</span> XML（在 grpSp XML 段内）→ <b>③ formula</b> 识别祖先 grpSp 标记 <span class="mono">in_group</span>、<b>从 formulas.md 排除</b> → <b>④ caption</b> DeepSeek 读 XML 段时转 <b>LaTeX</b> 融入块 caption → <b>⑥ author</b> 扩写消费。归宿唯一：组合内 → 块 caption（LaTeX）；组合外 → formulas.md。</div>
+</section>
+
+<!-- ================= 3. 根因修复流程图 ================= -->
+<section>
+  <div class="sec-title"><div class="no">3</div><h2>失败机理与修复示意</h2><div class="en">Failure &amp; Fix</div></div>
+
+  <div class="fig">
+    <svg viewBox="0 0 1080 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#0f4c81"/>
+        </marker>
+      </defs>
+      <text x="270" y="34" text-anchor="middle" font-size="18" font-weight="bold" fill="#b3382c">v1.5.1 现状（错误）</text>
+      <text x="810" y="34" text-anchor="middle" font-size="18" font-weight="bold" fill="#0e7a4d">v2.0.0 修复（正确）</text>
+
+      <!-- 左：错误 -->
+      <rect x="90" y="60" width="360" height="86" rx="10" fill="#fdf0ee" stroke="#b3382c" stroke-width="1.5"/>
+      <text x="270" y="88" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3382c">grpSp 组合被拆散</text>
+      <text x="270" y="110" text-anchor="middle" font-size="13.5" fill="#7a3a33">组内 pic/sp 当独立顶层对象</text>
+      <text x="270" y="130" text-anchor="middle" font-size="13.5" fill="#7a3a33">坐标未叠加组合偏移 → 错位 (0,0)</text>
+
+      <rect x="90" y="168" width="360" height="86" rx="10" fill="#fdf0ee" stroke="#b3382c" stroke-width="1.5"/>
+      <text x="270" y="196" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3382c">组内文字 → 页面纯文本</text>
+      <text x="270" y="218" text-anchor="middle" font-size="13.5" fill="#7a3a33">TXT 条目进 textbook 正文</text>
+      <text x="270" y="238" text-anchor="middle" font-size="13.5" fill="#7a3a33">与图块失去关联</text>
+
+      <rect x="90" y="276" width="360" height="86" rx="10" fill="#fdf0ee" stroke="#b3382c" stroke-width="1.5"/>
+      <text x="270" y="304" text-anchor="middle" font-size="15" font-weight="bold" fill="#b3382c">文本墙剔除叠图文字</text>
+      <text x="270" y="326" text-anchor="middle" font-size="13.5" fill="#7a3a33">&gt;10 字文本框整体剔除（max_shape_text）</text>
+      <text x="270" y="346" text-anchor="middle" font-size="13.5" fill="#7a3a33">Visio 无分支 → 静默丢失</text>
+
+      <line x1="455" y1="260" x2="625" y2="260" stroke="#0f4c81" stroke-width="3" marker-end="url(#arr)"/>
+      <text x="540" y="248" text-anchor="middle" font-size="14" font-weight="bold" fill="#0f4c81">重构</text>
+
+      <!-- 右：修复 -->
+      <rect x="630" y="60" width="360" height="86" rx="10" fill="#eef7f2" stroke="#0e7a4d" stroke-width="1.5"/>
+      <text x="810" y="88" text-anchor="middle" font-size="15" font-weight="bold" fill="#0e7a4d">grpSp → group 原子对象（规则1）</text>
+      <text x="810" y="110" text-anchor="middle" font-size="13.5" fill="#2f6b4e">bbox = 组合页面绝对外接框（含旋转）</text>
+      <text x="810" y="130" text-anchor="middle" font-size="13.5" fill="#2f6b4e">children 收编全部组内元素（rel_bbox）</text>
+
+      <rect x="630" y="168" width="360" height="86" rx="10" fill="#eef7f2" stroke="#0e7a4d" stroke-width="1.5"/>
+      <text x="810" y="196" text-anchor="middle" font-size="15" font-weight="bold" fill="#0e7a4d">组内文字 → 块内容（规则1/10）</text>
+      <text x="810" y="218" text-anchor="middle" font-size="13.5" fill="#2f6b4e">XML 段保留原生结构 + in_group 标记</text>
+      <text x="810" y="238" text-anchor="middle" font-size="13.5" fill="#2f6b4e">caption 由 DeepSeek 读 XML 生成</text>
+
+      <rect x="630" y="276" width="360" height="86" rx="10" fill="#eef7f2" stroke="#0e7a4d" stroke-width="1.5"/>
+      <text x="810" y="304" text-anchor="middle" font-size="15" font-weight="bold" fill="#0e7a4d">墙例外 + Visio 分支（规则4/16/F）</text>
+      <text x="810" y="326" text-anchor="middle" font-size="13.5" fill="#2f6b4e">文本中心落在图内 → 标签放行并入</text>
+      <text x="810" y="346" text-anchor="middle" font-size="13.5" fill="#2f6b4e">visio 原子对象 → 独立块 / 剥离 vsdx</text>
+    </svg>
+    <div class="cap">图 1 · 失败机理（左）与规则修复（右）对照</div>
+  </div>
+</section>
+
+<!-- ================= 4. 2.0.0 架构 ================= -->
+<section>
+  <div class="sec-title"><div class="no">4</div><h2>v2.0.0 技术架构与处理流程</h2><div class="en">v2.0.0 Architecture</div></div>
+
+  <h3>4.1 v2.0.0 八环节流水线（blocks 先行）</h3>
+  <div class="fig">
+    <svg viewBox="0 0 1080 250" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#1b7fb5"/>
+        </marker>
+      </defs>
+      <g font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">
+        <rect x="15"  y="55" width="112" height="58" rx="10" fill="#1b7fb5"/><text x="71"  y="80">① blocks ★</text><text x="71"  y="100" font-size="10.5" font-weight="normal">图块提取+解构</text>
+        <rect x="137" y="55" width="112" height="58" rx="10" fill="#0f4c81"/><text x="193" y="80">② text</text><text x="193" y="100" font-size="10.5" font-weight="normal">文本提取</text>
+        <rect x="259" y="55" width="112" height="58" rx="10" fill="#0f4c81"/><text x="315" y="80">③ formula</text><text x="315" y="100" font-size="10.5" font-weight="normal">公式提取</text>
+        <rect x="381" y="55" width="112" height="58" rx="10" fill="#1b7fb5"/><text x="437" y="80">④ caption ★</text><text x="437" y="100" font-size="10.5" font-weight="normal">AI 解读 sources/</text>
+        <rect x="503" y="55" width="112" height="58" rx="10" fill="#0f4c81"/><text x="559" y="80">⑤ related</text><text x="559" y="100" font-size="10.5" font-weight="normal">相关性过滤</text>
+        <rect x="625" y="55" width="112" height="58" rx="10" fill="#1b7fb5"/><text x="681" y="80">⑥ author ★</text><text x="681" y="100" font-size="10.5" font-weight="normal">教材扩写</text>
+        <rect x="747" y="55" width="112" height="58" rx="10" fill="#0f4c81"/><text x="803" y="80">⑦ binding</text><text x="803" y="100" font-size="10.5" font-weight="normal">图文绑定</text>
+        <rect x="869" y="55" width="116" height="58" rx="10" fill="#1b7fb5"/><text x="927" y="80">⑧ 输出 ★</text><text x="927" y="100" font-size="10.5" font-weight="normal">组装+清理</text>
+      </g>
+      <g stroke="#1b7fb5" stroke-width="2.5" marker-end="url(#arr2)">
+        <line x1="127" y1="84" x2="135" y2="84"/>
+        <line x1="249" y1="84" x2="257" y2="84"/>
+        <line x1="371" y1="84" x2="379" y2="84"/>
+        <line x1="493" y1="84" x2="501" y2="84"/>
+        <line x1="615" y1="84" x2="623" y2="84"/>
+        <line x1="737" y1="84" x2="745" y2="84"/>
+        <line x1="859" y1="84" x2="867" y2="84"/>
+      </g>
+      <text x="540" y="156" text-anchor="middle" font-size="14.5" font-weight="bold" fill="#0f4c81">① blocks 先行（识别 1-9 + 解构 10/12-15）：sources/ ← XML 段/矢量源/像素图原图；images/ ← 渲染图</text>
+      <text x="540" y="180" text-anchor="middle" font-size="13.5" fill="#4a5a6e">④ caption 只按顺序读 sources/ 文件（DeepSeek XML → qwen 像素图兜底），images/ 仅供人阅览</text>
+      <text x="540" y="202" text-anchor="middle" font-size="13.5" fill="#4a5a6e">⑥ author 充分利用 文本+公式+图块解读 扩写教材文案</text>
+      <text x="540" y="226" text-anchor="middle" font-size="13.5" fill="#4a5a6e">⑧ 输出：归位交付物；成功 → 删除全部过程文件；中断 → 保留 + state.json 自动接续</text>
+    </svg>
+    <div class="cap">图 2 · v2.0.0 八环节流水线（★ 为核心升级点；与 v1.5.1 差异：blocks 先行、解读独立且只读 sources/、成功清理过程文件）</div>
+  </div>
+
+  <h3>4.2 blocks 步骤内部流程（单阶段确定性拆块，无自由聚类）</h3>
+  <div class="fig">
+    <svg viewBox="0 0 1080 430" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#0f4c81"/>
+        </marker>
+      </defs>
+      <rect x="380" y="18" width="320" height="46" rx="10" fill="#0f4c81"/>
+      <text x="540" y="47" text-anchor="middle" font-size="16" font-weight="bold" fill="#fff">原子对象（prepare_block_inputs）</text>
+
+      <line x1="540" y1="64" x2="540" y2="92" stroke="#0f4c81" stroke-width="2.5" marker-end="url(#arr3)"/>
+
+      <!-- 页级跳过 -->
+      <rect x="380" y="94" width="320" height="42" rx="8" fill="#fdf6ec" stroke="#b45309" stroke-width="1.5"/>
+      <text x="540" y="120" text-anchor="middle" font-size="14.5" font-weight="bold" fill="#b45309">规则6：首页/尾页 → 整页跳过</text>
+
+      <line x1="540" y1="136" x2="540" y2="164" stroke="#0f4c81" stroke-width="2.5" marker-end="url(#arr3)"/>
+
+      <!-- 确定性拆块（单阶段） -->
+      <rect x="60" y="166" width="960" height="130" rx="12" fill="#eef7f2" stroke="#0e7a4d" stroke-width="1.5"/>
+      <text x="80" y="192" font-size="16" font-weight="bold" fill="#0e7a4d">确定性拆块（单阶段，规则 1-5/7/9；无自由聚类）</text>
+      <g font-size="13.5" fill="#1a2332">
+        <rect x="80" y="206" width="210" height="78" rx="8" fill="#fff" stroke="#0e7a4d"/>
+        <text x="185" y="230" text-anchor="middle" font-weight="bold">grpSp → group 块</text>
+        <text x="185" y="250" text-anchor="middle">XML 段导出（规则10）</text>
+        <text x="185" y="268" text-anchor="middle">children 收编 + src_rect</text>
+        <rect x="310" y="206" width="210" height="78" rx="8" fill="#fff" stroke="#0e7a4d"/>
+        <text x="415" y="230" text-anchor="middle" font-weight="bold">Visio → visio 块（规则3）</text>
+        <text x="415" y="250" text-anchor="middle">可剥离→.vsdx（13）</text>
+        <text x="415" y="268" text-anchor="middle">不可剥离→XML（14）</text>
+        <rect x="540" y="206" width="210" height="78" rx="8" fill="#fff" stroke="#0e7a4d"/>
+        <text x="645" y="230" text-anchor="middle" font-weight="bold">像素图 → raster 块（规则4）</text>
+        <text x="645" y="250" text-anchor="middle">≥20% 页面才成块（7）</text>
+        <text x="645" y="268" text-anchor="middle">重叠文本并入</text>
+        <rect x="770" y="206" width="230" height="78" rx="8" fill="#fff" stroke="#0e7a4d"/>
+        <text x="885" y="230" text-anchor="middle" font-weight="bold">SVG/WMF → 矢量块（规则15）</text>
+        <text x="885" y="250" text-anchor="middle">尽量 XML 段</text>
+        <text x="885" y="268" text-anchor="middle">不行才渲染 PNG</text>
+      </g>
+
+      <!-- 不再处理 -->
+      <rect x="140" y="320" width="800" height="52" rx="10" fill="#eef3f8" stroke="#1b7fb5" stroke-width="1.5"/>
+      <text x="540" y="342" text-anchor="middle" font-size="14" font-weight="bold" fill="#0f4c81">不再处理（不产块）：shape（文本框→text 阶段）· connector（非组合忽略）· 表格（→text 阶段，规则8）</text>
+      <text x="540" y="362" text-anchor="middle" font-size="12.5" fill="#4a5a6e">自由聚类区域生长（_region_grow）删除</text>
+
+      <line x1="540" y1="296" x2="540" y2="318" stroke="#0f4c81" stroke-width="2.5" marker-end="url(#arr3)"/>
+
+      <rect x="280" y="386" width="520" height="36" rx="8" fill="#0f4c81"/>
+      <text x="540" y="409" text-anchor="middle" font-size="14.5" font-weight="bold" fill="#fff">输出：块集合 = {group} ∪ {visio} ∪ {raster} ∪ {矢量}</text>
+    </svg>
+    <div class="cap">图 3 · blocks 步骤单阶段确定性拆块（删除自由聚类；shape/connector/表格移交 text 阶段或忽略）</div>
+  </div>
+
+  <h3>4.3 解读模型路由（规则 11/16）</h3>
+  <div class="fig">
+    <svg viewBox="0 0 1080 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#0f4c81"/>
+        </marker>
+      </defs>
+      <rect x="60" y="30" width="960" height="52" rx="10" fill="#eef3f8" stroke="#1b7fb5"/>
+      <text x="540" y="54" text-anchor="middle" font-size="16" font-weight="bold" fill="#0f4c81">④ caption：按顺序读 sources/ 文件，按文件类型路由模型</text>
+      <text x="540" y="74" text-anchor="middle" font-size="12.5" fill="#4a5a6e">images/ 不解读 · 仅供人阅览</text>
+
+      <line x1="330" y1="82" x2="330" y2="120" stroke="#0f4c81" stroke-width="2.5" marker-end="url(#arr4)"/>
+      <text x="330" y="108" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#0e7a4d">是（.xml：grpSp / Visio-XML / SVG-WMF）</text>
+      <line x1="760" y1="82" x2="760" y2="120" stroke="#0f4c81" stroke-width="2.5" marker-end="url(#arr4)"/>
+      <text x="760" y="108" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#b3382c">否（.png 像素图原图）</text>
+
+      <rect x="120" y="124" width="420" height="150" rx="12" fill="#eef7f2" stroke="#0e7a4d" stroke-width="1.5"/>
+      <text x="330" y="152" text-anchor="middle" font-size="15.5" font-weight="bold" fill="#0e7a4d">通道 A · DeepSeek-V4-Flash</text>
+      <text x="330" y="178" text-anchor="middle" font-size="13.5" fill="#2f6b4e">输入：XML 代码段 + 页面文本上下文</text>
+      <text x="330" y="200" text-anchor="middle" font-size="13.5" fill="#2f6b4e">组内公式（oMath）→ LaTeX 代码融入</text>
+      <text x="330" y="222" text-anchor="middle" font-size="13.5" fill="#2f6b4e">输出：块类型 + 语义 caption</text>
+      <text x="330" y="250" text-anchor="middle" font-size="12.5" fill="#4a5a6e">不消费 PNG（规则12）· 规则11/14/15</text>
+
+      <rect x="600" y="124" width="360" height="150" rx="12" fill="#fdf0ee" stroke="#b3382c" stroke-width="1.5"/>
+      <text x="780" y="152" text-anchor="middle" font-size="15.5" font-weight="bold" fill="#b3382c">通道 B · qwen3.7-plus VLM</text>
+      <text x="780" y="178" text-anchor="middle" font-size="13.5" fill="#7a3a33">输入：sources/ 下的像素图原图</text>
+      <text x="780" y="200" text-anchor="middle" font-size="13.5" fill="#7a3a33">仅兜底：无 XML 可解读的像素图块</text>
+      <text x="780" y="222" text-anchor="middle" font-size="13.5" fill="#7a3a33">（位图块原图，非 images/ 渲染图）</text>
+      <text x="780" y="250" text-anchor="middle" font-size="12.5" fill="#4a5a6e">规则 16 · VLM 兜底</text>
+
+      <rect x="330" y="290" width="420" height="34" rx="8" fill="#0f4c81"/>
+      <text x="540" y="312" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">caption / semantic_description → visual_blocks.json</text>
+    </svg>
+    <div class="cap">图 4 · 解读模型路由：DeepSeek 读 XML 优先，qwen VLM 仅兜底</div>
+  </div>
+</section>
+
+<!-- ================= 5. 输出知识库 ================= -->
+<section>
+  <div class="sec-title"><div class="no">5</div><h2>输出多模态知识库：文件与格式</h2><div class="en">Knowledge Base Output</div></div>
+
+  <h3>5.1 结果目录结构</h3>
+  <div class="tree">
+<span class="dir">&lt;名&gt;_result/</span><br>
+├─ <span class="dir">images/</span>                     <span class="cmt"># 渲染/阅览图（PowerPoint 渲染 PNG，仅供人查看解读效果）</span><br>
+│  ├─ slide_07_blk_01.png        <span class="cmt"># grpSp 组合块渲染（规则12，不参与解读）</span><br>
+│  ├─ slide_05_blk_02.png        <span class="cmt"># Visio 块渲染（规则13）</span><br>
+│  └─ slide_19_blk_01.png        <span class="cmt"># 像素图块渲染（阅览用）</span><br>
+├─ <span class="dir">sources/</span>                     <span class="cmt"># 解读唯一输入源（按文件名顺序解读）+ 可复用资源</span><br>
+│  ├─ <span class="hl">slide_07_blk_01_grp.xml</span>   <span class="cmt"># grpSp XML 段，页注释标记（规则10）</span><br>
+│  ├─ slide_05_blk_02.vsdx       <span class="cmt"># Visio 可剥离（规则13）</span><br>
+│  ├─ slide_05_blk_03_ole.xml    <span class="cmt"># Visio 不可剥离 → XML（规则14）</span><br>
+│  ├─ slide_08_blk_04_vec.xml    <span class="cmt"># SVG/WMF 矢量 XML（规则15）</span><br>
+│  ├─ slide_08_blk_04.svg        <span class="cmt"># 矢量源文件（保留原格式）</span><br>
+│  └─ <span class="hl">slide_19_blk_01.png</span>        <span class="cmt"># 像素图块原图（规则4，qwen 解读输入）</span><br>
+├─ <span class="hl">&lt;名&gt;_visual_blocks.json</span>        <span class="cmt"># 核心结构化（v2.0 schema）</span><br>
+├─ <span class="hl">&lt;名&gt;_visualBlock_text_binding.json</span> <span class="cmt"># 块↔文本图文关联（v1.0）</span><br>
+├─ <span class="hl">&lt;名&gt;_textbook.md</span>              <span class="cmt"># 教材文案（每页一节，扩写自文本+公式+块解读）</span><br>
+├─ <span class="hl">&lt;名&gt;_captions.md</span>              <span class="cmt"># 块解读（DeepSeek XML / qwen 兜底）</span><br>
+├─ &lt;名&gt;_texts.md / _text_entries.json   <span class="cmt"># 文本清单（组内文字标 [图块内文本]）</span><br>
+├─ &lt;名&gt;_formulas.md                     <span class="cmt"># 非组合公式（LaTeX）</span><br>
+├─ &lt;名&gt;_related_filter.json              <span class="cmt"># 相关性过滤审计</span><br>
+└─ <span class="dir">过程文件/</span>  <span class="cmt"># 仅中断时保留（by_page/atomic_objects/state.json…）；成功后清理</span>
+  </div>
+
+  <h3>5.2 核心文件格式</h3>
+  <table>
+    <tr><th style="width:240px">文件</th><th style="width:200px">Schema</th><th>内容与格式</th></tr>
+    <tr><td><span class="mono">&lt;名&gt;_visual_blocks.json</span></td><td><span class="mono">pptx_multimodal_slide_v2.0</span></td>
+      <td>slide_info / textual_content / visual_blocks[] / cross_modal_relations[] / summary。<b>v2.0.0 新增字段</b>：<span class="mono">xml_source</span>（块↔XML 文件关联）、<span class="mono">children</span>（组内元素）、<span class="mono">src_rect</span>（裁剪）、<span class="mono">vector_resources</span>。</td></tr>
+    <tr><td><span class="mono">&lt;名&gt;_visualBlock_text_binding.json</span></td><td><span class="mono">pptx_visual_block_text_binding_v1.0</span></td>
+      <td>cross_modal_relations 独立视图：text_anchor / relation_type / semantic_link；summary 含 binds_total / sources_total / xml_sources_total。</td></tr>
+    <tr><td><span class="mono">sources/slide_{页}_{块id}_grp.xml</span></td><td>PPTX 原生 XML 子集</td>
+      <td>首行注释 <span class="mono">&lt;!-- 第 N 页 grpSp: &lt;组合名&gt; (id=...) --&gt;</span>；本体 = <span class="mono">&lt;p:grpSp&gt;…&lt;/p:grpSp&gt;</span> 原始 XML（含组内全部元素/文字/公式 oMath/填充/srcRect）。</td></tr>
+    <tr><td><span class="mono">images/slide_{页}_{块id}.png</span></td><td>PNG（PowerPoint 渲染）</td>
+      <td>grpSp/Visio 块由 <b>PowerPoint COM 渲染</b>（ExportAsFixedFormat PDF + PyMuPDF；仅 PowerPoint，不再回退 LibreOffice）；<b>仅供人阅览解读效果，不进入解读管线</b>。</td></tr>
+    <tr><td><span class="mono">sources/slide_{页}_{块id}.png</span></td><td>PNG（像素图原图）</td>
+      <td>像素图块原图入 sources/（规则 4）；是 qwen VLM 解读的输入（规则 16），与 images/ 渲染图分离。</td></tr>
+    <tr><td><span class="mono">&lt;名&gt;_captions.md</span></td><td>Markdown</td>
+      <td>每块一条解读：块类型 + 语义描述；grpSp/矢量块含公式 LaTeX（DeepSeek 生成）。</td></tr>
+    <tr><td><span class="mono">&lt;名&gt;_textbook.md</span></td><td>Markdown</td>
+      <td>正文不含组内文字（组内文字转块内容，标 [图块内文本]）；表格输出 Markdown 表格。</td></tr>
+  </table>
+
+  <h3>5.3 VisualBlock 对象（v2.0.0 字段）</h3>
+  <div class="tree" style="font-size:13.5px">
+{
+  "block_id": "blk_01", "page": 7,
+  "block_type": "group_diagram",          <span class="cmt">// grpSp 组合块</span>
+  "bbox": {"x": 350, "y": 276, "w": 581, "h": 350},
+  "xml_source": "slide_07_blk_01_grp.xml",<span class="hl">// ★ 规则10：XML 段文件</span>
+  "text": "战略哲学\n商道",                <span class="cmt">// 组内文本合并</span>
+  "children": [                            <span class="hl">// ★ 组内元素</span>
+    {"kind": "shape", "text": "战略哲学", "rel_bbox": {...}},
+    {"kind": "raster", "output_file": "slide_07_pic_01.png",
+     "src_rect": [0.0, 0.0, 0.0, 0.0]}     <span class="hl">// ★ 规则9：srcRect 保留</span>
+  ],
+  "vector_resources": ["slide_07_blk_01_grp.xml"],
+  "internal_structure": {"nodes": [...], "edges": [...]},   <span class="cmt">// 表格不参与块（规则8 → text 阶段）</span>
+  "semantic_description": {...}            <span class="cmt">// DeepSeek XML 解读 / qwen 兜底</span>
+  "text_density": 0.9
+}
+  </div>
+</section>
+
+<!-- ================= 6. 对比 ================= -->
+<section>
+  <div class="sec-title"><div class="no">6</div><h2>v1.5.1 vs v2.0.0 对比</h2><div class="en">Comparison</div></div>
+  <div class="vs">
+    <div class="col old"><h4>v1.5.1（现状）</h4>
+      <ul>
+        <li>流程：text → formula → blocks → related → author → blocks_json</li>
+        <li>grpSp 被拆散，组内元素坐标错位</li>
+        <li>组内文字进页面正文纯文本</li>
+        <li>&gt;10 字文本框整块剔除（文本墙）</li>
+        <li>Visio 无原子对象分支 → 静默丢失</li>
+        <li>caption 全部走 qwen VLM 看 PNG</li>
+        <li>块内公式仅文本，不转 LaTeX</li>
+        <li>渲染依赖 LibreOffice；过程文件常驻</li>
+        <li>无 XML 段交付；像素图资源不在 sources/</li>
+      </ul>
+    </div>
+    <div class="arrow">→</div>
+    <div class="col new"><h4>v2.0.0（重构）</h4>
+      <ul>
+        <li>流程：blocks → text/formula → caption → related → author → binding → 输出</li>
+        <li>grpSp → group 块，bbox 正确，children 收编</li>
+        <li>组内文字 → 块内容（[图块内文本]）</li>
+        <li>文本墙例外：与图形重叠的文本放行</li>
+        <li>新增 visio 分支：独立块 / 剥离 vsdx / XML 兜底</li>
+        <li>解读按 sources/ 顺序：DeepSeek 读 XML；qwen 仅像素图兜底</li>
+        <li>组内公式 → DeepSeek 转 LaTeX 融入 caption</li>
+        <li>PowerPoint 渲染优先；成功清理过程文件、中断自动接续</li>
+        <li>sources/ 每组合一个 XML 段文件 + 像素图原图</li>
+        <li><b>blocks 单阶段确定性拆块（无自由聚类）</b>；<b>表格移交 text 阶段输出 Markdown</b></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7. 实施 ================= -->
+<section>
+  <div class="sec-title"><div class="no">7</div><h2>实施步骤与验收</h2><div class="en">Implementation</div></div>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><div class="b"><b>iter_groups</b>：递归枚举 grpSp（name/id/off/ext/chOff/chExt/rot/原始 XML 段）<code>extract_pptx_images.py</code></div></div>
+    <div class="step"><div class="n">2</div><div class="b"><b>group 原子对象 + visio 分支</b>：children 收编 + src_rect + 可剥离标志（修根因 A/F）<code>extract_pptx_images.py</code></div></div>
+    <div class="step"><div class="n">3</div><div class="b"><b>流程① blocks</b>：<b>单阶段确定性拆块</b>（grpSp/visio/raster/矢量，删除自由聚类）+ 资源归位（XML 段/矢量源/<b>像素图原图 → sources/</b>；渲染图 → images/）<code>visual_blocks.py / cli_blocks.py</code></div></div>
+    <div class="step"><div class="n">4</div><div class="b"><b>流程②③ text/formula</b>：in_group 标记 + 组内文本不进正文 + <b>表格在 text 阶段输出 Markdown</b>；formula 排除组内公式（in_group）<code>extract_texts.py</code></div></div>
+    <div class="step"><div class="n">5</div><div class="b"><b>流程④ caption</b>：按 sources/ 文件名顺序解读，路由 DeepSeek（XML 公式转 LaTeX）/ qwen（像素图兜底）；images/ 不解读 <code>cli_blocks.py / cli_paser.py</code></div></div>
+    <div class="step"><div class="n">6</div><div class="b"><b>流程⑤⑥⑦ related/author/binding</b>：过滤 → 教材扩写（消费 文本+公式+块解读）→ 图文绑定</div></div>
+    <div class="step"><div class="n">7</div><div class="b"><b>流程⑧ 输出 + 生命周期</b>：归位交付物；<b>成功 → 删全部过程文件</b>；中断 → 保留 + state.json 自动接续（新流程顺序）<code>cli_paser.py</code></div></div>
+    <div class="step"><div class="n">8</div><div class="b"><b>srcRect 一致性 + PowerPoint 渲染</b>：children 携带 src_rect + 裁剪落盘；PowerPoint COM 渲染（ExportAsFixedFormat PDF + PyMuPDF，仅 PowerPoint，规则 9/12/13）</div></div>
+    <div class="step"><div class="n">9</div><div class="b"><b>回归</b>：无组合课件块数对比 + 规则开关测试（BLOCK_RULES 默认全开、可关回退）</div></div>
+  </div>
+  <h3>验收断言（节选）</h3>
+  <div class="note good">
+    ✔ 每个 grpSp 一个 <span class="mono">sources/slide_{页}_{块id}_grp.xml</span>（页注释正确、XML 完整）；<b>像素图块原图在 sources/、渲染图在 images/</b><br>
+    ✔ caption 按 sources/ 文件名顺序解读；grpSp/矢量块由 DeepSeek-V4-Flash 生成、组内公式为 LaTeX；<b>qwen3.7-plus 只被像素图块调用</b>（日志可审计）；images/ 无解读调用<br>
+    ✔ 首页/尾页无块；非组合小图（&lt;20%）不进块；表格在 text 阶段为 Markdown 表格（无表格块）<br>
+    ✔ <b>全流程成功 → 结果目录无任何过程文件；中断 → 保留；再跑自动接续</b>；同一课件两次解析结果完全一致
+  </div>
+</section>
+
+<!-- ================= 8. 风险 ================= -->
+<section>
+  <div class="sec-title"><div class="no">8</div><h2>风险与对策</h2><div class="en">Risks</div></div>
+  <table>
+    <tr><th style="width:240px">风险</th><th>对策</th></tr>
+    <tr><td>嵌套组合深度 / 旋转缩放精确坐标</td><td>组合整体成块规避 + XML 段保留原生结构；children 存 rel_bbox，精确坐标留扩展点</td></tr>
+    <tr><td>raster 独立成块改变无组合课件行为</td><td><span class="mono">raster_standalone</span> 开关 + 回归对比；语义由块文本承接不丢失</td></tr>
+    <tr><td>PowerPoint 渲染依赖 Office</td><td><b>仅 PowerPoint COM</b>（ExportAsFixedFormat PDF + PyMuPDF；不再回退 LibreOffice）；无 Office 返回 None 优雅降级，不阻塞 XML/DeepSeek 通道</td></tr>
+    <tr><td>DeepSeek XML 解读失败 / 段过大</td><td>按块降级 qwen VLM（规则 16）；重试/截断策略</td></tr>
+    <tr><td>首页/尾页误判；小图 20% 误伤</td><td><span class="mono">--skip-pages</span> 覆盖；组合即豁免；阈值可配置；丢弃写入审计</td></tr>
+    <tr><td>成功清理误删交付物</td><td>只清理 <span class="mono">过程文件/</span> 与已知中间态（by_page/atomic_objects/manifest）；sources/、images/、JSON/MD 白名单保护</td></tr>
+    <tr><td>中断续传状态错乱</td><td>state.json 步骤表按新流程 ①–⑧ 重写；旧 state 检测（doc_md5）不匹配则全量重跑</td></tr>
+    <tr><td>atomic_objects.json schema 变化</td><td>新增字段全部可选；旧文件读取路径不变，向后兼容</td></tr>
+  </table>
+</section>
+
+<div style="text-align:center; color:#8a99ab; font-size:13px; margin-top:60px; border-top:1px solid #d7dee8; padding-top:18px;">
+  PPTX 图块提取管线 v1.5.1 → v2.0.0 升级方案 · pptx-wzq · 16 条定稿规则 · 图文并茂技术文档
+</div>
+
+</div>
+</body>
+</html>

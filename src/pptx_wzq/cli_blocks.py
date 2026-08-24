@@ -76,8 +76,9 @@ def _write_captions(captions_path: Path, slides: list, model: str) -> int:
              f"> 由 `pptx-blocks` 生成 · 模型 `{model}` · "
              f"每块一条；块渲染图见 images/ 目录。", ""]
     for s in slides:
-        page = s["page"]
-        blocks = s["blocks"]
+        page = (s.get("slide_info") or {}).get("slide_index",
+                                               s.get("page", 0))
+        blocks = s.get("visual_blocks", s.get("blocks", []))
         lines.append(f"## 第 {page} 页")
         lines.append("")
         for bi, blk in enumerate(blocks, start=1):
@@ -86,7 +87,10 @@ def _write_captions(captions_path: Path, slides: list, model: str) -> int:
             sd = blk.get("semantic_description") or {}
             goal = sd.get("expression_goal", "")
             role = sd.get("expression_role", "")
-            cap = sd.get("vlm_caption", "")
+            cap = sd.get("vlm_caption") or ""
+            if not cap and isinstance(sd.get("semantic_description"), str):
+                cap = sd["semantic_description"]
+            latex = sd.get("formula_latex") or ""
             feat = "、".join(sd.get("expression_features") or [])
             use = sd.get("teaching_use", "")
             lines.append(f"### IMG{n:04d} — `{img_name}`  ✅")
@@ -99,6 +103,8 @@ def _write_captions(captions_path: Path, slides: list, model: str) -> int:
             if feat:
                 lines.append(f"**表达特征**：{feat}。")
             lines.append(f"**内容理解**：{cap}")
+            if latex:
+                lines.append(f"**公式 (LaTeX)**：{latex}")
             if use:
                 lines.append(f"**教学用途**：{use}")
             lines.append("")
@@ -214,24 +220,349 @@ def _locate(args) -> tuple:
     return atomic, texts, formulas
 
 
+def _parse_desc_json(text: str) -> dict:
+    """从模型输出中提取 JSON（容忍代码块围栏/多余文本）。"""
+    if not text:
+        return {"semantic_description": ""}
+    try:
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            d = json.loads(m.group(0))
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {"semantic_description": text.strip()[:500]}
+
+
+def _compress_xml_for_ds(raw: str) -> str:
+    """本地压缩 grpSp XML 供 DeepSeek 解读——实测 API 对 >2000 字符 XML
+    静默返回空；压缩为「结构标签统计 + 全部文字 + 公式标记」保语义。"""
+    from xml.etree import ElementTree as _ET
+    texts = []
+    omath_n = 0
+    tags = {}
+    try:
+        root = _ET.fromstring(raw)
+        ns_t = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
+        ns_m = "{http://schemas.openxmlformats.org/officeDocument/2006/math}oMath"
+        for el in root.iter():
+            tag = el.tag.rsplit("}", 1)[-1]
+            tags[tag] = tags.get(tag, 0) + 1
+        for t in root.iter(ns_t):
+            if t.text and t.text.strip():
+                texts.append(t.text.strip())
+        omath_n = len(list(root.iter(ns_m)))
+    except Exception:
+        import re as _re
+        texts = _re.findall(r"<a:t>([^<]+)</a:t>", raw)
+        omath_n = raw.count("<m:oMath")
+    tag_summary = "、".join(f"{k}×{v}" for k, v in sorted(
+        tags.items(), key=lambda x: -x[1])[:12])
+    joined = (" | ".join(texts[:60]))[:800]
+    return (f"【组合结构】{tag_summary}\n"
+            f"【组内文字】{joined if joined else '（无文字节点）'}\n"
+            f"【公式对象】{omath_n} 个（若含 <m:oMath> 请提取转 LaTeX）")
+
+
+def _ds_read_xml(client, model: str, xml_path: Path,
+                 page_text: str) -> dict:
+    """v2.0 规则 11：DeepSeek-V4-Flash 解读 grpSp XML 段（组内公式转 LaTeX）。
+    超长 XML 先本地压缩（API 对长 XML 返回空）；返回空则降级（empty=True）。"""
+    try:
+        raw = xml_path.read_text(encoding="utf-8")
+    except OSError:
+        return {"semantic_description": ""}
+    # ≤1500 字符直接给原始 XML；超长给「前 1200 + 压缩摘要」控制总长 ≤2000
+    if len(raw) <= 1500:
+        xml_body = raw
+    else:
+        xml_body = (raw[:1200] + "\n\n……（XML 过长已压缩）……\n\n"
+                    + _compress_xml_for_ds(raw))[:2000]
+    prompt = (
+        "你是高校教材建设专家与可视化信息解析专家。下面是一个 PPT 可视逻辑块的"
+        "XML 代码段（grpSp/Visio/SVG 组合，含组内元素/文字/公式）。\n"
+        f"<xml>\n{xml_body}\n</xml>\n"
+        f"页面文本上下文：\n{page_text[:1200]}\n\n"
+        "请输出：\n"
+        "1. block_type：用 3-8 个中文字词概括该图块类型；\n"
+        "2. semantic_description：2-4 句教学语义解读（图块内容、结构关系、关键结论）；\n"
+        "3. 若 XML 含公式对象（<m:oMath> 等），提取并转换为 LaTeX 代码放入 formula_latex；\n"
+        "只输出 JSON：{\"block_type\": \"...\", \"semantic_description\": \"...\", "
+        "\"formula_latex\": \"...\"}")
+    last = ""
+    for attempt in (1, 2, 3):
+        try:
+            _p = prompt if attempt < 3 else (
+                prompt + "\n\n（再次请求：请务必完整输出唯一一个 JSON 对象，"
+                         "不要输出其他内容）")
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": _p}],
+                temperature=0.3, timeout=60, max_tokens=800)
+            last = resp.choices[0].message.content or ""
+            if last.strip():
+                break
+        except Exception as e:
+            last = ""
+            print(f"[警告] DeepSeek 解读失败（第 {attempt} 次）：{e}",
+                  file=sys.stderr)
+    if not last.strip():
+        return {"semantic_description": "", "empty": True}
+    d = _parse_desc_json(last)
+    if "formula_latex" not in d:
+        d["formula_latex"] = ""
+    d["caption_source"] = "deepseek_xml"
+    return d
+
+
+def _vlm_read_img(client, model: str, img_path: Path,
+                  page_text: str) -> dict:
+    """v2.0 规则 16：qwen3.7-plus 读像素图原图（仅 XML 不可解读的块兜底）。"""
+    import base64
+    try:
+        b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+    except OSError:
+        return {"semantic_description": ""}
+    prompt = (
+        "你是高校教材建设专家与可视化信息解析专家。请解读这张 PPT 图片图块"
+        "（像素图）。输出 JSON：{\"block_type\": \"...\", "
+        "\"semantic_description\": \"...\", \"formula_latex\": \"...\"}")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{b64}"}}]}],
+            temperature=0.3, timeout=60, max_tokens=800)
+        d = _parse_desc_json(resp.choices[0].message.content or "")
+        if "formula_latex" not in d:
+            d["formula_latex"] = ""
+        d["caption_source"] = "qwen_vlm"
+        return d
+    except Exception as e:
+        print(f"[警告] qwen 读图失败 {img_path.name}：{e}", file=sys.stderr)
+        return {"semantic_description": ""}
+
+
+def _caption_sources(out_slides: list, sources_dir: Path,
+                     images_dir: Path, page_texts: dict,
+                     ds_client, ds_model: str,
+                     vlm_client, vlm_model: str) -> int:
+    """v2.0 规则 11/16：按 sources/ 文件顺序解读——
+    .xml（grpSp/Visio/SVG-WMF 段）→ DeepSeek 读 XML（公式转 LaTeX，超长压缩）；
+    .png/.jpg（像素图块原图）→ qwen VLM 兜底；images/ 不解读。
+    DeepSeek 空响应时降级 qwen 读块渲染图（规则 16 精神）。
+    写回块 semantic_description/block_type，返回解读块数。"""
+    if not sources_dir.is_dir():
+        return 0
+    # 块 → 源文件索引
+    blk_src = {}
+    for s in out_slides:
+        page = (s.get("slide_info") or {}).get("slide_index",
+                                               s.get("page", 0))
+        for blk in s.get("visual_blocks", []):
+            a = blk.get("assets") or {}
+            blk_src[(page, blk.get("block_id", ""))] = {
+                "xml": (a.get("xml_source") or "").replace("./sources/", ""),
+                "png": (a.get("raster_png") or "").replace("./sources/", ""),
+            }
+    n = 0
+    for f in sorted(sources_dir.iterdir()):
+        if f.is_dir():
+            continue
+        m = re.match(r"slide_(\d+)_(blk_\d+)_", f.name)
+        if not m:
+            continue
+        page, blk_id = int(m.group(1)), m.group(2)
+        src = blk_src.get((page, blk_id))
+        if src is None:
+            continue
+        blk = None
+        for s in out_slides:
+            if (s.get("slide_info") or {}).get("slide_index",
+                                               s.get("page", 0)) != page:
+                continue
+            for b in s.get("visual_blocks", []):
+                if b.get("block_id") == blk_id:
+                    blk = b
+                    break
+            if blk is not None:
+                break
+        if blk is None:
+            continue
+        page_text = page_texts.get(page, "")
+        if f.suffix.lower() == ".xml" and ds_client is not None:
+            desc = _ds_read_xml(ds_client, ds_model, f, page_text)
+            if desc.get("empty"):
+                # 规则 16 兜底：DeepSeek XML 通道不可用
+                img = images_dir / f"slide_{page:02d}_{blk_id}.png"
+                if vlm_client is not None and img.is_file():
+                    desc = _vlm_read_img(vlm_client, vlm_model, img,
+                                         page_text)
+                    desc["fallback_from"] = "deepseek_empty"
+                    print(f"[解读] 块 {page}/{blk_id} DeepSeek 空响应 "
+                          f"→ qwen 读渲染图兜底", file=sys.stderr)
+                else:
+                    # 二级兜底：规则模板描述（保证块有内容）
+                    desc = {"block_type": blk.get("block_type", ""),
+                            "semantic_description":
+                                f"（DeepSeek XML 解读空响应，规则模板兜底）"
+                                f"该图块为{blk.get('block_type', '可视逻辑图')}，"
+                                f"组内内容：{(blk.get('text') or '')[:120]}",
+                            "formula_latex": "",
+                            "caption_source": "rule_fallback"}
+            blk["semantic_description"] = desc
+            if desc.get("block_type"):
+                blk["block_type"] = desc["block_type"]
+            n += 1
+        elif f.suffix.lower() in (".png", ".jpg", ".jpeg") \
+                and vlm_client is not None:
+            desc = _vlm_read_img(vlm_client, vlm_model, f, page_text)
+            blk["semantic_description"] = desc
+            if desc.get("block_type"):
+                blk["block_type"] = desc["block_type"]
+            n += 1
+    return n
+
+
+def _read_slide_rels(pptx_path, page_no: int) -> dict:
+    """读某页 slide 的关系表（rId → Target），用于解析 grpSp XML 段内的
+    r:embed/r:link 引用（规则补充：资源图片落盘 rldimg）。"""
+    import zipfile
+    import posixpath
+    from xml.etree import ElementTree as _ET
+    rels = {}
+    try:
+        with zipfile.ZipFile(pptx_path) as zf:
+            rp = f"ppt/slides/_rels/slide{page_no}.xml.rels"
+            if rp not in zf.namelist():
+                return rels
+            root = _ET.fromstring(zf.read(rp))
+            ns_r = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+            for rel in root.iter(f"{ns_r}Relationship"):
+                rid = rel.get("Id", "")
+                tgt = rel.get("Target", "")
+                if rid and tgt:
+                    # Target 相对 slide 目录，归一化到包内路径
+                    full = posixpath.normpath(posixpath.join("ppt/slides", tgt))
+                    rels[rid] = full
+    except Exception as e:
+        print(f"[警告] 读 slide{page_no} rels 失败：{e}", file=sys.stderr)
+    return rels
+
+
+def _grp_embed_ids(xml_seg: str) -> set:
+    """从 grpSp XML 段中提取全部 r:embed / r:link 的关系 id（rIdX）。"""
+    ids = set()
+    for m in re.finditer(r'(?:embed|link)="(rId\d+)"', xml_seg):
+        ids.add(m.group(1))
+    return ids
+
+
+def _copy_grp_blips(xml_seg: str, pptx_path, page_no: int,
+                    blk_id: str, rldimg_dir: Path) -> list:
+    """把 grpSp XML 段引用的资源图片（ppt/media/ 下）复制到
+    sources/rldimg/，命名 slide_{页}_{块id}_{原名}。返回复制文件名列表。"""
+    if not xml_seg or not pptx_path:
+        return []
+    rels = _read_slide_rels(pptx_path, page_no)
+    if not rels:
+        return []
+    rldimg_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    import zipfile
+    import posixpath
+    try:
+        with zipfile.ZipFile(pptx_path) as zf:
+            for rid in _grp_embed_ids(xml_seg):
+                media_path = rels.get(rid, "")
+                if not media_path.startswith("ppt/media/"):
+                    continue  # 仅资源图片（媒体）
+                if media_path not in zf.namelist():
+                    continue
+                base = posixpath.basename(media_path)
+                dst = rldimg_dir / f"slide_{page_no:02d}_{blk_id}_{base}"
+                try:
+                    dst.write_bytes(zf.read(media_path))
+                    copied.append(dst.name)
+                except OSError as e:
+                    print(f"[警告] 写 rldimg 资源失败 {dst.name}：{e}",
+                          file=sys.stderr)
+    except Exception as e:
+        print(f"[警告] 复制 grpSp 资源图片失败：{e}", file=sys.stderr)
+    return copied
+
+
 def _export_block_resources_and_binding(out_slides: list,
                                          atomic_objects: list,
                                          by_page_dir: Path,
                                          sources_dir: Path,
                                          binding_path: Path,
-                                         stem: str) -> tuple:
-    """把每个块内的矢量/Visio 源文件复制到 sources/（按 block_id 命名），
-    并把块↔文本跨模态关系写成独立的 visualBlock_text_binding.json。
+                                         stem: str,
+                                         pptx_path: str = "") -> tuple:
+    """v2.0（规则 10/13/14/15 + 像素图入 sources）：
+    1) grpSp 块的 XML 段 → 每组合一个 sources/slide_{页}_{块id}_grp.xml（页注释 + 原始 XML）；
+    2) 块内矢量/Visio 源文件 → sources/（按 block_id 命名）；
+    3) 像素图块原图 → sources/slide_{页}_{块id}.png；
+    4) 块↔文本跨模态关系 → visualBlock_text_binding.json。
 
     返回 (n_sources, n_bindings)。"""
     sources_dir.mkdir(parents=True, exist_ok=True)
+    ao_map = {o.get("obj_id"): o for o in atomic_objects}
     n_sources = 0
+    n_xml = 0
+    n_rldimg = 0
     bindings = []
     for s in out_slides:
         page = (s.get("slide_info") or {}).get("slide_index", s.get("page", 0))
         for blk in s.get("visual_blocks", []):
             blk_id = blk.get("block_id", "")
-            # 1) 矢量/Visio 源 → sources/（以 block_id 命名，避免冲突）
+            assets = blk.get("assets") or {}
+            # 1) grpSp 块 XML 段导出（规则 10：每组合一个独立文件，页注释标记）
+            goid = assets.get("group_obj_id") or blk.get("source_group_id")
+            if goid:
+                gobj = ao_map.get(goid) or {}
+                xml_seg = gobj.get("xml_segment")
+                if xml_seg:
+                    dst = sources_dir / f"slide_{page:02d}_{blk_id}_grp.xml"
+                    try:
+                        dst.write_text(
+                            f"<!-- 第 {page} 页 grpSp: {gobj.get('shape_name') or ''} "
+                            f"(obj_id={goid}) -->\n{xml_seg}",
+                            encoding="utf-8")
+                        blk.setdefault("assets", {})
+                        blk["assets"]["xml_source"] = f"./sources/{dst.name}"
+                        n_xml += 1
+                        n_sources += 1
+                    except OSError as e:
+                        print(f"[警告] 写 grpSp XML 段失败 {dst.name}：{e}",
+                              file=sys.stderr)
+                    # 1b) XML 段内 r:embed/r:link 资源图片 → sources/rldimg/
+                    rld = _copy_grp_blips(xml_seg, pptx_path, page, blk_id,
+                                          sources_dir / "rldimg")
+                    if rld:
+                        blk.setdefault("assets", {})
+                        blk["assets"]["rldimg"] = \
+                            [f"./sources/rldimg/{f}" for f in rld]
+                        n_rldimg += len(rld)
+                        n_sources += len(rld)
+            # 2) 像素图块原图 → sources/（规则 4，v2.0）
+            rsrc = assets.get("raster_source")
+            if rsrc:
+                src = by_page_dir / rsrc
+                if src.is_file():
+                    dst = sources_dir / f"slide_{page:02d}_{blk_id}.png"
+                    try:
+                        shutil.copy2(str(src), str(dst))
+                        blk.setdefault("assets", {})
+                        blk["assets"]["raster_png"] = f"./sources/{dst.name}"
+                        n_sources += 1
+                    except OSError as e:
+                        print(f"[警告] 复制像素图原图失败 {rsrc}：{e}",
+                              file=sys.stderr)
+            # 3) 矢量/Visio 源 → sources/（以 block_id 命名，避免冲突）
             vec = blk.get("vector_resources") or []
             copied = []
             for res in vec:
@@ -252,7 +583,7 @@ def _export_block_resources_and_binding(out_slides: list,
                 blk["assets"]["vector_svg"] = f"./sources/{copied[0]}"
                 blk["assets"]["block_resources"] = \
                     [f"./sources/{c}" for c in copied]
-            # 2) 块↔文本关系（来自本页 cross_modal_relations）
+            # 4) 块↔文本关系（来自本页 cross_modal_relations）
             for rel in s.get("cross_modal_relations", []):
                 if rel.get("target_block_id") != blk_id:
                     continue
@@ -276,6 +607,8 @@ def _export_block_resources_and_binding(out_slides: list,
                                for s in out_slides),
             "bindings_total": len(bindings),
             "sources_total": n_sources,
+            "xml_sources_total": n_xml,
+            "rldimg_total": n_rldimg,
         },
         "bindings": bindings,
     }
@@ -322,6 +655,13 @@ def _main(argv=None) -> int:
                     help="语义模型 API Key 环境变量名（默认 DEEPSEEK_API_KEY）")
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：已有 visual_blocks.json 时保留完成页")
+    ap.add_argument("--prev-blocks", type=Path, default=None,
+                    help="v2.0：上一轮（caption 步骤）的 visual_blocks.json，"
+                         "合并其 block_type/semantic_description（保留 caption 解读）")
+    ap.add_argument("--caption-sources", action="store_true",
+                    help="v2.0 规则 11/16：按 sources/ 文件顺序解读——"
+                         ".xml → DeepSeek 读 XML（公式转 LaTeX）；"
+                         ".png 像素图原图 → qwen VLM 兜底；images/ 不解读")
     ap.add_argument("--json", action="store_true",
                     help="把统计输出到 stdout")
     ap.add_argument("--version", action="version", version=VERSION)
@@ -331,7 +671,7 @@ def _main(argv=None) -> int:
     atomic, texts_path, formulas_path = _locate(args)
     if not atomic:
         print("[错误] 未找到 atomic_objects.json"
-              "（请先运行 pptx-img 或指定 --atomic-objects）",
+              "（将自动准备；请指定 --atomic-objects 或检查输出目录）",
               file=sys.stderr)
         return EXIT_USAGE
     page_texts = _load_texts(Path(texts_path)) if texts_path else {}
@@ -355,12 +695,14 @@ def _main(argv=None) -> int:
                 client = None
 
     t0 = time.time()
+    # v2.0：--caption-sources 时块结构阶段不跑 VLM（解读走 sources/ 路由）
+    blk_client = None if args.caption_sources else client
     slides = VB.extract_blocks(
         str(args.pptx) if args.pptx else out_dir.name,
         str(out_dir),
         atomic_objects=atomic,
         page_texts=page_texts,
-        client=client,
+        client=blk_client,
         model=args.model,
         on_progress=None,
     )
@@ -369,6 +711,8 @@ def _main(argv=None) -> int:
     if texts_path:
         stem = Path(texts_path).stem[:-len("_texts")] \
             if str(texts_path).endswith("_texts.md") else Path(texts_path).stem
+    if not stem and args.pptx and args.pptx.is_file():
+        stem = Path(args.pptx).stem
     image_dir = out_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     # 清空旧块渲染图（块编号随规则变化，避免旧图残留造成 引用数≠文件数）
@@ -379,10 +723,11 @@ def _main(argv=None) -> int:
             pass
     n_rendered = 0
     if args.pptx and args.pptx.is_file():
-        # 单次整页渲染（缓存到课件旁 .render_cache），再按块 bbox 裁剪，
-        # 避免每个块重复跑 LibreOffice（237 块 × 整页渲染会极慢）
         from pptx_wzq import extract_pptx_images as E
-        cache = Path(args.pptx).parent / ".render_cache"
+        # 单次整页渲染（缓存按课件名分目录 .render_cache/<stem>），再按块 bbox 裁剪，
+        # 避免同目录多课件页数恰好 ≥ 时误用别的课件的渲染结果（战略管理 23 页
+        # vs 逻辑体系 20 页实测）；也避免每个块重复跑 PowerPoint 渲染
+        cache = Path(args.pptx).parent / ".render_cache" / Path(args.pptx).stem
         render_dpi = getattr(args, "render_dpi", 150)
         pages = E.render_pptx_pages(str(args.pptx), cache, dpi=render_dpi)
         # 真实页面尺寸（EMU）：16:9 等非常规比例必须传入，否则裁剪
@@ -423,12 +768,42 @@ def _main(argv=None) -> int:
     # 组装最终 JSON
     out_slides = _assemble_slides(slides, page_texts, page_formulas,
                                   args.pptx, stem, image_dir, out_dir / "sources")
+    # v2.0 merge：--prev-blocks 提供 caption 步骤的解读（block_type +
+    # semantic_description，caption_source 非空），合并到当前块，供 enrich 保留
+    if getattr(args, "prev_blocks", None) and Path(args.prev_blocks).is_file():
+        try:
+            _pv = json.loads(Path(args.prev_blocks).read_text(encoding="utf-8"))
+            _pv_map = {}
+            for _s in _pv.get("slides") or []:
+                _pg = (_s.get("slide_info") or {}).get("slide_index",
+                                                       _s.get("page", 0))
+                for _b in _s.get("visual_blocks") or []:
+                    _pv_map[(_pg, _b.get("block_id"))] = _b
+            _n_merge = 0
+            for _s in out_slides:
+                _pg = (_s.get("slide_info") or {}).get("slide_index", 0)
+                for _b in _s.get("visual_blocks") or []:
+                    _pb = _pv_map.get((_pg, _b.get("block_id")))
+                    if _pb and (_pb.get("semantic_description") or {}).get(
+                            "caption_source"):
+                        if _pb.get("block_type"):
+                            _b["block_type"] = _pb["block_type"]
+                        _b["semantic_description"] = \
+                            _pb["semantic_description"]
+                        _n_merge += 1
+            if _n_merge:
+                print(f"[合并] 合并 caption 解读 {_n_merge} 个块"
+                      f"（block_type/semantic_description）", file=sys.stderr)
+        except Exception as _e:
+            print(f"[警告] prev-blocks 合并失败：{_e}", file=sys.stderr)
     # DeepSeek 语义增强（用户要求：图文绑定/JSON 组装步骤用 LLM 生成
     # semantic_description——expression_goal/role/features 等真实语义内容，
     # 覆盖规则回退模板；不依赖视觉模型，原料=块结构+该页文本/公式）
     n_enriched = 0
     n_rels = 0
-    if args.semantic_model:
+    # v2.0：--caption-sources 时块解读走 sources/ 路由（_caption_sources 在
+    # 资源导出后调用），跳过 enrich_semantics/enrich_relations 避免覆盖
+    if args.semantic_model and not args.caption_sources:
         sem_key = os.environ.get(args.semantic_key_env, "")
         if not sem_key:
             print(f"[警告] 未设置 {args.semantic_key_env}，跳过 "
@@ -458,16 +833,40 @@ def _main(argv=None) -> int:
         "semantics_enriched": n_enriched,
         "relations_enriched": n_rels,
     }
-    # 交付物：块矢量资源 → sources/；块↔文本关系 → visualBlock_text_binding.json
-    # （仅在最终组装步骤 --semantic-model 时生成；clustering 预跑不产出）
-    if args.semantic_model:
-        by_page_dir = out_dir / "by_page"
-        binding_path = out_dir / f"{stem or 'slide'}_visualBlock_text_binding.json"
-        n_src, n_bnd = _export_block_resources_and_binding(
-            out_slides, atomic, by_page_dir, out_dir / "sources",
-            binding_path, stem)
-        print(f"[交付] 块矢量资源 {n_src} 个 → sources/；"
-              f"块↔文本关系 {n_bnd} 条 → {binding_path.name}", file=sys.stderr)
+    # 交付物（v2.0 默认导出，规则 10/13/15 + 像素图入 sources + binding）：
+    # grpSp XML 段 → sources/、矢量/Visio 源 → sources/、像素图原图 → sources/、
+    # 块↔文本关系 → visualBlock_text_binding.json
+    by_page_dir = out_dir / "by_page"
+    binding_path = out_dir / f"{stem or 'slide'}_visualBlock_text_binding.json"
+    n_src, n_bnd = _export_block_resources_and_binding(
+        out_slides, atomic, by_page_dir, out_dir / "sources",
+        binding_path, stem,
+        pptx_path=str(args.pptx) if (args.pptx and args.pptx.is_file()) else "")
+    print(f"[交付] 块资源 {n_src} 个 → sources/（含 XML 段 {binding_path.parent.name}）；"
+          f"块↔文本关系 {n_bnd} 条 → {binding_path.name}", file=sys.stderr)
+
+    # v2.0 规则 11/16：caption 解读路由（按 sources/ 顺序；images/ 不解读）
+    n_cap_src = 0
+    if args.caption_sources:
+        ds_client = None
+        vlm_client = None
+        if args.semantic_model and os.environ.get(args.semantic_key_env, ""):
+            try:
+                from openai import OpenAI
+                ds_client = OpenAI(
+                    api_key=os.environ[args.semantic_key_env],
+                    base_url=args.semantic_base_url)
+            except Exception as e:
+                print(f"[警告] DeepSeek 客户端初始化失败：{e}",
+                      file=sys.stderr)
+        if client is not None:      # qwen VLM 客户端（--no-vlm 时无）
+            vlm_client = client
+        n_cap_src = _caption_sources(
+            out_slides, out_dir / "sources", out_dir / "images", page_texts,
+            ds_client, args.semantic_model, vlm_client, args.model)
+        print(f"[解读] sources/ 顺序解读 {n_cap_src} 个块"
+              f"（DeepSeek-XML / qwen-像素图兜底）", file=sys.stderr)
+        summary["captions_sources"] = n_cap_src
 
     binding = {
         "$schema": "pptx_multimodal_slide_v2.0",
@@ -482,10 +881,12 @@ def _main(argv=None) -> int:
     out_path.write_text(json.dumps(binding, ensure_ascii=False, indent=1),
                         encoding="utf-8")
 
-    # captions.md（块级）
+    # captions.md（块级；caption-sources 模式用 out_slides 以含 DeepSeek/qwen 解读）
     cap_path = Path(args.captions) if args.captions else \
         out_dir / f"{stem or 'slide'}_captions.md"
-    n_cap = _write_captions(cap_path, slides, args.model)
+    n_cap = _write_captions(cap_path,
+                            out_slides if args.caption_sources else slides,
+                            args.model)
 
     dt = time.time() - t0
     print(f"[OK] 可视逻辑块解析完成：{summary['slides']} 页 / "

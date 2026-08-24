@@ -92,7 +92,9 @@ def _sp_meta(sp):
 
 
 def _table_text(gf) -> str:
-    """graphicFrame 内表格文本：每行单元格以 | 连接，行之间用 / 连接。"""
+    """graphicFrame 内表格文本 → Markdown 表格（表头+分隔行+数据行）。
+
+    v2.0（规则 8）：表格在 text 阶段按表格读取，输出 Markdown 表格。"""
     rows = []
     for tr in gf.iter(_q("a", "tr")):
         cells = []
@@ -101,20 +103,41 @@ def _table_text(gf) -> str:
             for t in tc.iter(TITLE):
                 if t.text:
                     parts.append(t.text)
-            cells.append("".join(parts).strip())
-        rows.append(" | ".join(x for x in cells if x))
-    return " / ".join(x for x in rows if x)
+            cells.append("".join(parts).strip().replace("|", "\\|"))
+        if cells:
+            rows.append(cells)
+    if not rows:
+        return ""
+    n_cols = max(len(r) for r in rows)
+    lines = ["| " + " | ".join(rows[0]) + " |"]
+    lines.append("|" + "---|" * n_cols)
+    for r in rows[1:]:
+        r = (r + [""] * n_cols)[:n_cols]
+        lines.append("| " + " | ".join(r) + " |")
+    return "\n".join(lines)
 
 
 def _iter_slide_texts(slide_xml: bytes, with_tables: bool = True):
-    """遍历 slide 全部文本对象，产出 (kind, name, ph_type, text, x, y, w, h)。"""
+    """遍历 slide 全部文本对象，产出 (kind, name, ph_type, text, x, y, w, h, in_group)。
+
+    v2.0：in_group 标记组内文本（祖先含 grpSp 的组合，规则 1/5 归属块内容）。"""
     root = ET.fromstring(slide_xml)
+    parent = {c: p for p in root.iter() for c in p}
+
+    def in_grp(el) -> bool:
+        cur = parent.get(el)
+        while cur is not None:
+            if cur.tag == _q("p", "grpSp"):
+                return True
+            cur = parent.get(cur)
+        return False
+
     for sp in root.iter(SP):
         txt = _sp_text(sp)
         if not txt:
             continue
         name, ph_type, x, y, w, h = _sp_meta(sp)
-        yield ("sp", name, ph_type, txt, x, y, w, h)
+        yield ("sp", name, ph_type, txt, x, y, w, h, in_grp(sp))
     if with_tables:
         for gf in root.iter(GRAPHICFRAME):
             txt = _table_text(gf)
@@ -137,7 +160,8 @@ def _iter_slide_texts(slide_xml: bytes, with_tables: bool = True):
                             h = int(ext.get("cy", 0)) / 914400 * 96
                 except Exception:
                     pass
-                yield ("table", name or "表格", "tbl", txt, x, y, w, h)
+                yield ("table", name or "表格", "tbl", txt, x, y, w, h,
+                       in_grp(gf))
 
 
 def _fixed_texts(zf: zipfile.ZipFile) -> set:
@@ -189,11 +213,12 @@ def extract_texts(pptx_path, out_dir,
                 except Exception:
                     pass
             items = []
-            for kind, name, ph, txt, x, y, w, h in \
+            for kind, name, ph, txt, x, y, w, h, in_grp in \
                     _iter_slide_texts(zf.read(slide_path), with_tables):
                 items.append({"kind": kind, "name": name, "ph": ph,
                               "text": txt.strip(),
-                              "x": x, "y": y, "w": w, "h": h})
+                              "x": x, "y": y, "w": w, "h": h,
+                              "in_group": in_grp})
             all_pages_texts.append(items)
 
         # 跨页重复统计（≥90% 页面相同 → 全局固定文本）
@@ -244,27 +269,46 @@ def extract_texts(pptx_path, out_dir,
                                     "reason": reason,
                                     "shape": it["name"], "ph": it["ph"],
                                     "x": it["x"], "y": it["y"],
-                                    "w": it["w"], "h": it["h"]})
+                                    "w": it["w"], "h": it["h"],
+                                    "in_group": it.get("in_group", False)})
+                    continue
+                # 表格（规则 8，v2.0）：输出 Markdown 表格块，不进行表
+                if it.get("kind") == "table":
+                    n_total += 1
+                    lines.append(f"**表格: {it['name']}**"
+                                 f"{'（组合内）' if it.get('in_group') else ''}"
+                                 f" 坐标 {pos}")
+                    lines.append("")
+                    for _trow in txt.split("\n"):
+                        lines.append(_trow)
+                    lines.append("")
+                    entries.append({"page": page_no, "id": None,
+                                    "type": "表格", "text": txt,
+                                    "shape": it["name"], "ph": it["ph"],
+                                    "x": it["x"], "y": it["y"],
+                                    "w": it["w"], "h": it["h"],
+                                    "in_group": it.get("in_group", False)})
                     continue
                 kept_this += 1
                 n_total += 1
                 is_title = it["ph"] in TITLE_PH or \
                     re.search(r"title|标题", it["name"], re.I)
-                if it.get("kind") == "table":
-                    label = "表格行"
-                else:
-                    label = "标题" if is_title else "内容"
+                label = "标题" if is_title else "内容"
                 if is_title:
                     n_title += 1
-                txt_disp = txt.replace("|", "\\|")
+                # v2.0：组内文本（图块内容）标注，不进正文
+                disp = txt.replace("|", "\\|")
+                if it.get("in_group"):
+                    disp = f"[图块内文本] {disp}"
                 lines.append(f"| TXT{page_no:03d}-{kept_this:02d} | "
-                             f"{label} | {txt_disp} | {pos} |")
+                             f"{label} | {disp} | {pos} |")
                 entries.append({"page": page_no,
                                 "id": f"TXT{page_no:03d}-{kept_this:02d}",
                                 "type": label, "text": txt,
                                 "shape": it["name"], "ph": it["ph"],
                                 "x": it["x"], "y": it["y"],
-                                "w": it["w"], "h": it["h"]})
+                                "w": it["w"], "h": it["h"],
+                                "in_group": it.get("in_group", False)})
             lines.append("")
 
         lines.append("---")

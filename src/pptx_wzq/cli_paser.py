@@ -56,9 +56,11 @@ from pptx_wzq import __version__ as _PKG_VERSION
 VERSION = f"pptx-wzq {_PKG_VERSION} (可视逻辑块全栈解析 + Semantic Captioning 合并)"
 PROC_DIR = "过程文件"
 
-# 步骤顺序（新流程：text/formula 提前为 blocks 提供上下文；
-# blocks 合并原 caption；blocks_json 组装最终 JSON）
-STEPS = ["text", "formula", "blocks", "related", "author", "blocks_json"]
+# 步骤顺序（v2.0 流程①-⑧：blocks 先行解构 → text/formula 提供上下文 →
+# caption 独立解读（sources/ 顺序，DeepSeek-XML / qwen 兜底）→ related →
+# author 扩写 → blocks_json 组装输出）
+STEPS = ["blocks", "text", "formula", "caption", "related", "author",
+         "blocks_json"]
 
 
 # --------------------------------------------------------------------------
@@ -131,6 +133,10 @@ def _artifact_ok(out: Path, stem: str, step: str) -> bool:
         cands = [out / f"{stem}_visual_blocks.json",
                  proc / "blocks" / f"{stem}_visual_blocks.json",
                  work / "blocks" / f"{stem}_visual_blocks.json"]
+    elif step == "caption":
+        cands = [out / f"{stem}_captions.md",
+                 proc / "blocks" / "captions.md",
+                 work / "blocks" / "captions.md"]
     elif step == "related":
         cands = [out / f"{stem}_related_filter.json",
                  proc / "cap" / f"{stem}_related_filter.json",
@@ -412,27 +418,45 @@ def _exec_step(step: str, args, work: Path, stem: str,
                      "mtef_decoder；OCR 可选",
             outs=[work / "formula"], idx=idx, total=total)
     elif step == "blocks":
+        # v2.0 流程①：只做确定性拆块 + 解构（XML 段/矢量源/像素图 → sources/，
+        # 渲染图 → images/）；caption 解读独立为步骤④（caption）
         blk = [work / "blocks", "--pptx", pptx,
                "--texts", work / "text" / f"{stem}_texts.md",
                "--formulas", work / "formula" / f"{stem}_formulas.md",
                "-o", work / "blocks" / f"{stem}_visual_blocks.json",
-               "--captions", work / "blocks" / "captions.md"]
-        # 逃生通道：VLM（qwen）单块解读耗时不可控时，可用环境变量
-        # PPTX_PASER_NO_VLM=1 让 blocks 步骤跳过 VLM（纯规则聚类，0 Token）；
-        # 最终 semantic_description 仍由 blocks_json 步骤的 DeepSeek 生成
-        if os.environ.get("PPTX_PASER_NO_VLM", "").strip() == "1":
-            blk.append("--no-vlm")
+               "--captions", work / "blocks" / "captions.md",
+               "--no-vlm"]   # 结构阶段不跑 VLM；解读走 caption 步骤
         if action == "resume":
             blk.append("--resume")
         _run_step(
-            "可视逻辑块解析 + Semantic Captioning（合并原图片解读）",
+            "可视逻辑块提取 + 解构（v2.0 确定性拆块）",
             "cli_blocks", blk, ".",
-            desc="读原子对象 + 页文本/公式上下文 → 空间聚类（并查集）把每页"
-                 "拆成 1~6 个可视逻辑块 → 块渲染 PNG → 视觉模型判定 block_type "
-                 "并生成 semantic_description（表达目标/作用/特征/图文描述/"
-                 "教学用途）→ 图/树拓扑 → 跨模态关系 → 块级 captions.md + "
-                 "visual_blocks.json",
-            resource="消耗 Token（视觉模型 qwen3.7-plus，DASHSCOPE_API_KEY）",
+            desc="读原子对象 → 单阶段确定性拆块（grpSp→group / visio / "
+                 "像素图≥20% / SVG-WMF 矢量；无自由聚类）→ 块渲染 PNG（images/）"
+                 "→ grpSp XML 段每组合一个文件 + 资源图片（rldimg）→ sources/ "
+                 "→ visual_blocks.json + captions.md（规则模板）",
+            resource="本地 + 渲染（PowerPoint COM，仅 PowerPoint）；解读在 caption 步骤",
+            outs=[work / "blocks"], idx=idx, total=total)
+    elif step == "caption":
+        # v2.0 流程④：按 sources/ 文件顺序解读——.xml → DeepSeek 读 XML
+        # （公式转 LaTeX）；.png 像素图原图 → qwen VLM 兜底；images/ 不解读
+        cap = [work / "blocks", "--pptx", pptx,
+               "--texts", work / "text" / f"{stem}_texts.md",
+               "-o", work / "blocks" / f"{stem}_visual_blocks.json",
+               "--captions", work / "blocks" / "captions.md",
+               "--caption-sources",
+               "--semantic-model", "deepseek-v4-flash"]
+        if action == "resume":
+            cap.append("--resume")
+        _run_step(
+            "图块 AI 解读（sources/ 顺序路由）",
+            "cli_blocks", cap, ".",
+            desc="遍历 sources/ 文件（按文件名排序）：.xml（grpSp/Visio/"
+                 "SVG-WMF 段）→ DeepSeek-V4-Flash 读 XML（超长本地压缩，"
+                 "组内公式转 LaTeX）；.png 像素图原图 → qwen3.7-plus 读图兜底；"
+                 "DeepSeek 空响应 → qwen 读渲染图/规则模板二级兜底；"
+                 "images/ 仅供人阅览不解读",
+            resource="消耗 Token（DeepSeek deepseek-v4-flash + qwen3.7-plus 兜底）",
             outs=[work / "blocks"], idx=idx, total=total)
     elif step == "related":
         _run_step(
@@ -472,6 +496,7 @@ def _exec_step(step: str, args, work: Path, stem: str,
               "--texts", work / "text" / f"{stem}_texts.md",
               "--formulas", work / "formula" / f"{stem}_formulas.md",
               "--pptx", pptx,
+              "--prev-blocks", work / "blocks" / f"{stem}_visual_blocks.json",
               "-o", work.parent / f"{stem}_visual_blocks.json",
               "--captions", work.parent / f"{stem}_captions.md",
               # DeepSeek 语义增强：本步骤用文本模型生成每个可视逻辑块的
@@ -571,17 +596,40 @@ def _organize(out: Path, work: Path, stem: str) -> None:
               file=sys.stderr)
     # visual_blocks.json 由 blocks_json 步骤直接写到 out，这里只校验
 
-    # 其余全部进过程文件
-    moved = 0
+    # 5) 文本/公式清单 → 结果目录（交付物）
+    for _src, _names in ((work / "text", (f"{stem}_texts.md",
+                                          f"{stem}_text_entries.json")),
+                         (work / "formula", (f"{stem}_formulas.md",))):
+        if _src.is_dir():
+            for _n in _names:
+                _f = _src / _n
+                if _f.is_file() and not (out / _n).exists():
+                    try:
+                        shutil.move(str(_f), str(out / _n))
+                        print(f"[归位] {_n} → {out}", file=sys.stderr)
+                    except OSError:
+                        pass
+
+    # v2.0 生命周期：全流程成功后删除全部过程文件（不保留 过程文件/），
+    # 只留交付物（images/ sources/ JSON/MD）
+    removed = 0
     for item in sorted(work.iterdir()):
-        dst = proc / item.name
-        if dst.exists():
-            shutil.rmtree(dst, ignore_errors=True)
-        shutil.move(str(item), str(dst))
-        moved += 1
-    print(f"[归位] 过程文件 {moved} 项 → {proc}", file=sys.stderr)
+        try:
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink()
+            removed += 1
+        except OSError:
+            pass
+    print(f"[清理] 删除过程文件 {removed} 项（v2.0 成功即清理）",
+          file=sys.stderr)
     try:
         shutil.rmtree(work, ignore_errors=True)
+    except OSError:
+        pass
+    try:
+        shutil.rmtree(out / PROC_DIR, ignore_errors=True)
     except OSError:
         pass
 

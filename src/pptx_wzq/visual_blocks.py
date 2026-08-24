@@ -82,6 +82,7 @@ SINGLE_KIND_TO_TYPE = {
     "raster": "raster_image",
     "vector": "vector_image",
     "visio": "visio_diagram",
+    "group": "group_diagram",
     "chart": "chart",
     "formula": "formula_block",
     "table": "native_table",
@@ -167,6 +168,8 @@ class VisualBlock:
     page: int = 0
     is_single: bool = False
     vector_resources: list = field(default_factory=list)  # 块内矢量/Visio 成员
+    text: str = ""              # v2.0：块内文本合并（组内文字 + 重叠标签）
+    xml_source: str = ""        # v2.0：块关联的 XML 段文件名（规则 10）
     text_density: float = 0.0   # 文字空间密度：块内文本字符数 / 块面积(px²)
                                 # 高密度=文本区，低密度=逻辑图/图（判据）
 
@@ -694,7 +697,8 @@ def render_block_to_png(slide_page: int, block: VisualBlock,
     自动读取真实页面尺寸（EMU）传入裁剪，避免 16:9 页面左侧被切。"""
     try:
         from pptx_wzq import extract_pptx_images as E
-        cache = Path(pptx_path).parent / ".render_cache"
+        # 渲染缓存按课件名分目录，避免同目录多课件误用别的课件渲染页
+        cache = Path(pptx_path).parent / ".render_cache" / Path(pptx_path).stem
         pages = E.render_pptx_pages(str(pptx_path), cache, dpi=dpi)
         if not pages or (slide_page - 1) >= len(pages):
             return False
@@ -898,15 +902,22 @@ def enrich_semantics(client, model: str, slides: list, page_texts: dict,
                 if not (goal or role or cap):
                     continue
                 blk["semantic_description"] = {
-                    "block_type": blk.get("block_type", ""),
+                    # v2.0 merge：优先保留 caption 步骤的 block_type/解读
+                    "block_type": old_sd.get("block_type")
+                                  or blk.get("block_type", ""),
                     "expression_goal": goal or old_sd.get("expression_goal", ""),
                     "expression_role": role or old_sd.get("expression_role", ""),
                     "expression_features": [
                         str(f)[:30] for f in feats if str(f).strip()][:5]
                         or old_sd.get("expression_features", ["可视化"]),
-                    "vlm_caption": cap or old_sd.get("vlm_caption", ""),
+                    "vlm_caption": cap or old_sd.get("vlm_caption") or (
+                        old_sd.get("semantic_description")
+                        if isinstance(old_sd.get("semantic_description"), str)
+                        else ""),
                     "teaching_use": use or old_sd.get("teaching_use",
                                                       "教学辅助图示"),
+                    "formula_latex": old_sd.get("formula_latex", ""),
+                    "caption_source": old_sd.get("caption_source", ""),
                 }
                 enriched += 1
             except Exception as e:
@@ -1116,12 +1127,29 @@ def extract_blocks(pptx_path: str, out_dir: str,
         pass
     out_dir = Path(out_dir)
 
+    # 总页数（规则 6 首页/尾页跳过需要）
+    n_slides = 0
+    try:
+        import zipfile
+        import re as _re
+        with zipfile.ZipFile(str(pptx_path)) as _zf:
+            n_slides = len([_n for _n in _zf.namelist()
+                            if _re.match(r"ppt/slides/slide\d+\.xml$", _n)])
+    except Exception:  # pragma: no cover
+        pass
+    cfg["n_slides"] = n_slides
+
     by_page_objs = {}
     for o in atomic:
         by_page_objs.setdefault(o.page, []).append(o)
 
     slides_out = []
     for page_no in sorted(by_page_objs):
+        # 规则 6：首页（题目页）/尾页（致谢页）整页跳过图块产出
+        if cfg.get("skip_cover_pages", True) and n_slides >= 2 and \
+                (page_no == 1 or page_no == n_slides):
+            slides_out.append({"page": page_no, "blocks": [], "relations": []})
+            continue
         objs = _filter_noise(by_page_objs[page_no], cfg)
         # 剔除页面文本区（标题/正文/副标题等占位符 shape）：它们不属于
         # 可视逻辑块（内容已由文本提取步骤保留），否则大文本框会与
@@ -1137,88 +1165,73 @@ def extract_blocks(pptx_path: str, out_dir: str,
         objs = [o for o in objs
                 if 0 <= o.bbox["x"] + o.bbox["w"] / 2 <= pw and
                 0 <= o.bbox["y"] + o.bbox["h"] / 2 <= ph]
-        # 文本密度判据（用户准则）：可视逻辑块内文本框应为短标签。
-        # 单个 shape 文本 > max_shape_text 字 → 视为潜在正文文本框，
-        # 不参与聚类（逻辑图节点/箭头标注通常字少）
-        max_shape_text = cfg.get("max_shape_text", 10)
-        objs = [o for o in objs
-                if not (o.kind == "shape" and
-                        len((o.text or "").strip()) > max_shape_text)]
+        # 越界/装饰对象剔除保留
         if not objs:
             slides_out.append({"page": page_no, "blocks": [], "relations": []})
             continue
-        # 用户准则①：raster/vector/visio 面积 > 整页 30% → 独立成块
-        big_objs, objs = _split_big_objects(objs, cfg)
-        # 用户准则②：四向种子扩展区域生长（从种子对象出发四向扩展，
-        # 遇到字多文本对象（墙）或边界即停；加法生长天然不切碎表格/
-        # 框图，凹区域被墙/间隙阻断成多个区域，无需凸分割）
-        sub_clusters = _region_grow(objs, cfg)
-        # 大面积对象各自成簇
-        for o in big_objs:
-            sub_clusters.append([o])
-        # 限制每页块数：按面积降序取前 max_blocks_per_slide
-        sub_clusters.sort(key=lambda c: -sum(
-            (o.bbox.get("w", 0) * o.bbox.get("h", 0)) for o in c))
-        if len(sub_clusters) > cfg["max_blocks_per_slide"]:
-            sub_clusters = sub_clusters[:cfg["max_blocks_per_slide"]]
 
+        # ============ v2.0：单阶段确定性拆块（无自由聚类）============
+        # 只产确定性图块：group / visio / vector / raster（≥20% 页面）；
+        # shape（文本框→text 阶段）、connector（非组合忽略）、table（→text 阶段）不产块（规则 8）
         blocks = []
-        for ci, cl in enumerate(sub_clusters, start=1):
-            blk_id = f"blk_{ci:02d}"
-            # 块级文本密度校验：块内文本总量 > max_block_text 字 →
-            # 判定混入了正文文本区，剔除长文本成员后重组块（剩余成员
-            # 若仍为 1 个有效可视化对象则保留为单对象块）
-            max_block_text = cfg.get("max_block_text", 30)
-            total_text = sum(len((o.text or "").strip())
-                             for o in cl if o.kind in ("shape", "connector"))
-            if total_text > max_block_text:
-                cl = [o for o in cl
-                      if not (o.kind in ("shape", "connector") and
-                              len((o.text or "").strip()) > max_shape_text)]
-            if not cl:
+        blk_seq = 0
+        raster_min_area = cfg.get("raster_min_area_ratio", 0.20) * pw * ph
+
+        def _center_in(tb: dict, bb: dict) -> bool:
+            cx = tb["x"] + tb["w"] / 2
+            cy = tb["y"] + tb["h"] / 2
+            return bb["x"] <= cx <= bb["x"] + bb["w"] and \
+                   bb["y"] <= cy <= bb["y"] + bb["h"]
+
+        for o in sorted(objs, key=lambda x: x.z_index):
+            if o.kind not in ("group", "visio", "vector", "raster"):
                 continue
-            min_x = min(o.bbox["x"] for o in cl)
-            min_y = min(o.bbox["y"] for o in cl)
-            max_x = max(o.bbox["x"] + o.bbox["w"] for o in cl)
-            max_y = max(o.bbox["y"] + o.bbox["h"] for o in cl)
+            members = [o]
+            if o.kind == "raster":
+                if o.bbox["w"] * o.bbox["h"] < raster_min_area:
+                    continue  # 规则 7：非组合像素图 < 20% 页面 → 舍弃
+                # 规则 4 补丁：重叠其上的文本并入（文本中心落在图内）
+                for t in objs:
+                    if t.kind == "shape" and (t.text or "").strip() and \
+                            t.obj_id not in [m.obj_id for m in members] and \
+                            _center_in(t.bbox, o.bbox):
+                        members.append(t)
+            blk_seq += 1
+            blk_id = f"blk_{blk_seq:02d}"
+            min_x = min(m.bbox["x"] for m in members)
+            min_y = min(m.bbox["y"] for m in members)
+            max_x = max(m.bbox["x"] + m.bbox["w"] for m in members)
+            max_y = max(m.bbox["y"] + m.bbox["h"] for m in members)
             bbox = {"x": round(min_x, 1), "y": round(min_y, 1),
                     "w": round(max_x - min_x, 1), "h": round(max_y - min_y, 1)}
-            # 符号碎片过滤（用户准则）：可视逻辑块应是有表达目的的可视化
-            # 对象集合。无文本、无媒体（图/表/visio）、无连接（connector）
-            # 的纯形状块（如电路元件符号：2 个小形状拼成）不构成可视逻辑块：
-            #   对象数 ≤3 → 无条件碎片（单个/成对符号）；
-            #   对象数 >3 但块面积 < 页面 min_block_area_ratio → 碎片。
-            # 含文本标签 / 图 / 表 / 连接的块不受此限制（逻辑图节点短标签、
-            # 独立小图均保留）。
-            has_text = any((o.text or "").strip() for o in cl)
-            has_media = any(o.kind in ("raster", "vector", "visio",
-                                       "table", "chart") for o in cl)
-            has_conn = any(o.kind == "connector" for o in cl)
-            if not has_text and not has_media and not has_conn:
-                _page_area = cfg.get("page_w", 960) * cfg.get("page_h", 720)
-                if len(cl) <= 3 or \
-                        bbox["w"] * bbox["h"] < _page_area * \
-                        cfg.get("min_block_area_ratio", 0.10):
-                    continue  # 符号碎片：不输出
-            zs = [o.z_index for o in cl]
+            zs = [m.z_index for m in members]
             block = VisualBlock(
                 block_id=blk_id, page=page_no, bbox=bbox,
                 z_index_range=[min(zs), max(zs)],
-                member_obj_ids=[o.obj_id for o in cl],
-                is_single=len(cl) == 1,
+                member_obj_ids=[m.obj_id for m in members],
+                is_single=len(members) == 1,
             )
-            block.block_type = _guess_block_type(cl)
-            block.internal_structure = _infer_topology(cl)
+            # v2.0：块文本 = 组内文本合并 + 重叠标签
+            block.text = "\n".join(
+                (m.text or "").strip() for m in members if (m.text or "").strip())
+            # v2.0：块关联 XML 段（group 对象自带 xml_segment，规则 10）
+            if o.kind == "group":
+                block.xml_source = f"slide_{page_no:02d}_{blk_id}_grp.xml"
+                block.assets["group_obj_id"] = o.obj_id
+            if o.kind == "raster" and o.output_file:
+                # 规则 4：像素图块原图入 sources/（v2.0）
+                block.assets["raster_source"] = o.output_file
+            block.block_type = _guess_block_type(members)
+            block.internal_structure = _infer_topology(members)
             block.semantic_description = _fallback_description(block)
-            # 文字空间密度：块内文本字符数 / 块面积（px²），放大 1e6 便于阅读
             _area = max(1.0, bbox["w"] * bbox["h"])
-            _chars = sum(len((o.text or "").strip())
-                         for o in cl if o.kind in ("shape", "connector"))
+            _chars = sum(len((m.text or "").strip())
+                         for m in members
+                         if m.kind in ("shape", "connector", "group"))
             block.text_density = round(_chars / _area * 1_000_000, 3)
-            # 块矢量/Visio 资源：成员中属于矢量/Visio 的对象 output_file
-            # （供 cli_blocks 复制到 sources/，作为可视逻辑区的可编辑资源）
+            # 块矢量/Visio 资源（供 cli_blocks 复制到 sources/）
             _vec = []
-            for _mid in (o.obj_id for o in cl):
+            for _mid in (m.obj_id for m in members):
                 _ao = ao_map.get(_mid)
                 if _ao is None:
                     continue
@@ -1229,6 +1242,10 @@ def extract_blocks(pptx_path: str, out_dir: str,
                         _vec.append(_of)
             block.vector_resources = _vec
             blocks.append(block)
+
+        # 限制每页块数（确定性块一般少，保留上限保护）
+        if len(blocks) > cfg["max_blocks_per_slide"]:
+            blocks = blocks[:cfg["max_blocks_per_slide"]]
 
         # VLM 增强（可选）
         if client is not None:

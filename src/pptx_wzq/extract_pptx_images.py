@@ -97,6 +97,7 @@ def q(pre: str, tag: str) -> str:
 PIC = q("p", "pic")
 SP = q("p", "sp")
 CXNSP = q("p", "cxnSp")
+GRP = q("p", "grpSp")
 BLIP = q("a", "blip")
 CNVPR = q("p", "cNvPr")
 BG = q("p", "bg")
@@ -399,13 +400,27 @@ def iter_background_chain(zf: zipfile.ZipFile, slide_path: str, slide_rels_full:
 # --------------------------------------------------------------------------
 # 公式对象（oleObj / OMML）与图表（graphicFrame）遍历
 # --------------------------------------------------------------------------
-def iter_ole_formulas(slide_xml: bytes):
+def iter_ole_formulas(slide_xml: bytes, skip_in_group: bool = False):
     """扫描 OLE 对象（公式编辑器 / 嵌入对象），返回 (shape_name, embed_rid, xfrm, prog_id)。
     真实课件中 OLE 常位于 <p:graphicFrame> 内（少数在 <p:sp>），且 r:id 直接挂在
-    <p:oleObj> 上（不一定有嵌套 <p:oleObjEmbed>）。progId 含 'equation' 即公式编辑器。"""
+    <p:oleObj> 上（不一定有嵌套 <p:oleObjEmbed>）。progId 含 'equation' 即公式编辑器。
+
+    v2.0：skip_in_group=True 时跳过祖先含 grpSp 的 OLE（组合内 OLE 归块内容，规则 5）。"""
     root = ET.fromstring(slide_xml)
-    for parent in (GRAPHICFRAME, SP):
-        for el in root.iter(parent):
+    pmap = {c: p for p in root.iter() for c in p}
+
+    def _in_grp(el) -> bool:
+        cur = pmap.get(el)
+        while cur is not None:
+            if cur.tag == GRP:
+                return True
+            cur = pmap.get(cur)
+        return False
+
+    for parent_tag in (GRAPHICFRAME, SP):
+        for el in root.iter(parent_tag):
+            if skip_in_group and _in_grp(el):
+                continue
             ole = el.find(".//" + OLEOBJ)
             if ole is None:
                 continue
@@ -538,22 +553,192 @@ def _xfrm_to_bbox(xfrm) -> dict:
         return {"x": 0, "y": 0, "w": 0, "h": 0}
 
 
+def _extract_grp_segments(text: str) -> list:
+    """从 slide XML 原文提取每个 <p:grpSp>…</p:grpSp> 段，保留原生
+    p:/a:/r: 前缀（可读性，规则 10）。深度计数处理嵌套 grpSp。
+    返回段列表；自闭合/未闭合的异常段跳过，绝不死循环。"""
+    open_tag = "<p:grpSp"
+    close_tag = "</p:grpSp>"
+    segs = []
+    i = 0
+    while True:
+        start = text.find(open_tag, i)
+        if start == -1:
+            break
+        # 自闭合 <p:grpSp ... />（无内容）→ 跳过
+        tag_end = text.find(">", start)
+        if tag_end != -1 and text[tag_end - 1] == "/":
+            i = tag_end + 1
+            continue
+        depth = 1
+        j = start + len(open_tag)
+        while depth > 0:
+            n_open = text.find(open_tag, j)
+            n_close = text.find(close_tag, j)
+            if n_close == -1:
+                break  # 未闭合：放弃本段
+            if n_open != -1 and n_open < n_close:
+                depth += 1
+                j = n_open + len(open_tag)
+            else:
+                depth -= 1
+                j = n_close + len(close_tag)
+        if depth <= 0 and j > start + len(open_tag):
+            segs.append(text[start:j])
+            i = j
+        else:
+            # 异常/未闭合：至少推进 open_tag 长度，避免死循环
+            i = start + len(open_tag)
+    return segs
+
+
 def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                             page_records: list) -> list:
     """把本页的图片记录（ImageRecord）与 shape/connector/table 统一映射为
-    原子对象 dict 列表（按 z_index 排序）。图片记录缺 z_index 时排在 shape 之后。"""
-    objs = []
-    # 图片类记录（已有 x/y/shape_w/h）
+    原子对象 dict 列表（按 z_index 排序）。图片记录缺 z_index 时排在 shape 之后。
+
+    v2.0 规则化（16 条定稿）：
+    - grpSp 组合 → kind="group" 原子对象（bbox=组合页面绝对外接框，含旋转；
+      children=组内全部元素递归收编；xml_segment=原始 XML 段供规则 10 导出）；
+      嵌套 grpSp 只作 children（规则 2）。
+    - 组内元素不生成顶层独立原子对象（规则 1）。
+    - 非组合 Visio → kind="visio"（新增分支，修根因 F，规则 3）。
+    """
+    root = ET.fromstring(slide_xml)
+    objs: list = []
+    TEXT_REGION_PH = {"title", "ctrTitle", "subTitle", "body", "obj"}
+    # 原始文本中的 grpSp 段（保留 p:/a:/r: 前缀，可读性优化）
+    grp_segs = _extract_grp_segments(slide_xml.decode("utf-8", "ignore"))
+    all_grps = list(root.iter(GRP))
+    grp_order = {id(el): i for i, el in enumerate(all_grps)}
+
+    def shape_name(el) -> str:
+        for cnvpr in el.iter(CNVPR):
+            return cnvpr.get("name", "") or ""
+        return ""
+
+    # parent map：判定元素是否位于某 grpSp 内（ElementTree 无 xpath ancestor 轴）
+    parent_map = {c: p for p in root.iter() for c in p}
+
+    def in_group(el) -> bool:
+        cur = parent_map.get(el)
+        while cur is not None:
+            if cur.tag == GRP:
+                return True
+            cur = parent_map.get(cur)
+        return False
+
+    # ---- 元素 → 记录 顺序匹配（iter_pictures 与 root.iter(PIC) 同序）----
+    pic_recs = [r for r in page_records if r.kind == "picture"]
+    pic_els = list(root.iter(PIC))
+    pic_pairs = list(zip(pic_els, pic_recs))
+    pic_map = {id(el): rec for el, rec in pic_pairs}
+
+    def child_of(grp_el, cidx):
+        """递归收编 grpSp 内元素为 children（含嵌套 grpSp）。返回 (children, texts)。"""
+        children, texts = [], []
+        n = 0
+        for el in grp_el:
+            tag = el.tag
+            cid = f"s{page_no:02d}_g{cidx:02d}_c{n:02d}"
+            nm = shape_name(el)
+            xfrm = _find_xfrm(el)
+            rb = _xfrm_to_bbox(xfrm)
+            if tag == SP:
+                t = _sp_text(el)
+                if t:
+                    texts.append(t)
+                children.append({"obj_id": cid, "kind": "shape", "shape_name": nm,
+                                 "text": t, "rel_bbox": rb,
+                                 "output_file": "", "src_rect": None})
+            elif tag == PIC:
+                rec = pic_map.get(id(el))
+                sr = None
+                blip_fill = el.find(q("p", "blipFill"))
+                if blip_fill is not None:
+                    sr = parse_src_rect(blip_fill)
+                children.append({"obj_id": cid, "kind": "raster", "shape_name": nm,
+                                 "text": "", "rel_bbox": rb,
+                                 "output_file": (rec.output_file if rec else "") or "",
+                                 "src_rect": list(sr) if sr else None,
+                                 "original_format": ((rec.original_format or "").lower()
+                                                     if rec else "")})
+            elif tag == CXNSP:
+                t = _sp_text(el)
+                if t:
+                    texts.append(t)
+                children.append({"obj_id": cid, "kind": "connector", "shape_name": nm,
+                                 "text": t or "", "rel_bbox": rb,
+                                 "output_file": "", "src_rect": None})
+            elif tag == GRAPHICFRAME:
+                tbl = el.find(".//" + q("a", "tbl"))
+                rows = []
+                if tbl is not None:
+                    for tr in tbl.iter(q("a", "tr")):
+                        row = []
+                        for tc in tr.iter(q("a", "tc")):
+                            cells = [t.text or "" for t in tc.iter(q("a", "t"))]
+                            row.append("".join(cells).strip())
+                        rows.append(row)
+                children.append({"obj_id": cid, "kind": "table", "shape_name": nm,
+                                 "text": "", "rel_bbox": rb,
+                                 "output_file": "", "src_rect": None, "rows": rows})
+            elif tag == OLEOBJ:
+                t = ""
+                children.append({"obj_id": cid, "kind": "ole", "shape_name": nm,
+                                 "text": t, "rel_bbox": rb,
+                                 "output_file": "", "src_rect": None})
+            elif tag == GRP:  # 嵌套组合：不单独提取，递归收编为 children（规则 2）
+                sub, sub_texts = child_of(el, cidx)
+                texts.extend(sub_texts)
+                children.append({"obj_id": cid, "kind": "group", "shape_name": nm,
+                                 "text": "\n".join(sub_texts), "rel_bbox": rb,
+                                 "output_file": "", "src_rect": None,
+                                 "children": sub})
+            n += 1
+        return children, texts
+
+    # ---- 1) grpSp 组合 → group 原子对象（顶层：不被其他 grpSp 包含）----
+    groups = [g for g in root.iter(GRP) if not in_group(g)]
+    z_cur = 0
+    for gi, g_el in enumerate(groups, start=1):
+        nm = shape_name(g_el)
+        xfrm = _find_xfrm(g_el)
+        bbox = _xfrm_to_bbox(xfrm)
+        children, texts = child_of(g_el, gi)
+        # XML 段：优先原生前缀原文（p:/a:/r:），兜底 ET 序列化（ns0 前缀）
+        _oidx = grp_order.get(id(g_el))
+        if _oidx is not None and _oidx < len(grp_segs):
+            xml_seg = grp_segs[_oidx]
+        else:
+            xml_seg = ET.tostring(g_el, encoding="unicode")
+        objs.append({
+            "obj_id": f"s{page_no:02d}_g{gi:02d}",
+            "page": page_no, "kind": "group",
+            "shape_name": nm, "text": "\n".join(texts),
+            "bbox": bbox, "z_index": z_cur,
+            "source_media": "", "output_file": "", "original_format": "",
+            "children": children,
+            "group_id": gi,
+            "xml_segment": xml_seg,
+        })
+        z_cur += 1
+
+    # ---- 2) 图片类记录（非组内）→ raster/vector/visio/chart/formula ----
+    in_group_pic_rec = {id(r) for el, r in pic_pairs if in_group(el)}
     for rec in page_records:
         if not rec.output_file:
             continue
         kind = rec.kind
+        bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
         if kind == "picture":
+            # 组内图片已收编 children（规则 1），不生成顶层对象
+            if id(rec) in in_group_pic_rec:
+                continue
             fmt = (rec.original_format or "").lower()
             a_kind = "vector" if fmt in VECTOR else "raster"
             if fmt in ("vsdx", "vsd"):
                 a_kind = "visio"
-            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
             objs.append({
                 "obj_id": f"s{page_no:02d}_r{rec.index:02d}",
                 "page": page_no, "kind": a_kind,
@@ -564,8 +749,18 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "original_format": fmt,
                 "children": [],
             })
+        elif kind == "visio":   # ★ 新增分支（规则 3，修根因 F）
+            objs.append({
+                "obj_id": f"s{page_no:02d}_v{rec.index:02d}",
+                "page": page_no, "kind": "visio",
+                "shape_name": rec.shape_name or "",
+                "text": "", "bbox": bbox, "z_index": 1000 + rec.index,
+                "source_media": rec.source_media or "",
+                "output_file": rec.output_file or "",
+                "original_format": (rec.original_format or "").lower(),
+                "children": [], "ole_progid": rec.ole_progid or "",
+            })
         elif kind == "chart":
-            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
             objs.append({
                 "obj_id": f"s{page_no:02d}_c{rec.index:02d}",
                 "page": page_no, "kind": "chart",
@@ -577,7 +772,6 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "children": [],
             })
         elif kind == "formula_ole":
-            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
             objs.append({
                 "obj_id": f"s{page_no:02d}_f{rec.index:02d}",
                 "page": page_no, "kind": "formula",
@@ -589,7 +783,6 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "children": [],
             })
         elif kind == "formula_omath":
-            bbox = {"x": rec.x, "y": rec.y, "w": rec.shape_w, "h": rec.shape_h}
             objs.append({
                 "obj_id": f"s{page_no:02d}_m{rec.index:02d}",
                 "page": page_no, "kind": "formula",
@@ -600,46 +793,88 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "original_format": rec.original_format or "",
                 "children": [],
             })
-    # 原生 shape（文本框/图形）
-    # 标题/正文/副标题等占位符 → kind="text_region"（页面文本区，不参与
-    # 可视逻辑块聚类；它们的内容已由文本提取步骤完整保留）
-    TEXT_REGION_PH = {"title", "ctrTitle", "subTitle", "body", "obj"}
-    for name, text, xfrm, z, ph_type in iter_native_shapes(slide_xml):
+        # fill/background 记录维持原样（顶层）
+
+    # ---- 3) 原生 shape（非组内；组内已收编 children）----
+    for sp in root.iter(SP):
+        if in_group(sp):
+            continue
+        name = shape_name(sp)
+        text = _sp_text(sp)
         if not text and not name:
             continue
+        xfrm = _find_xfrm(sp)
+        if xfrm is None:
+            continue
+        ph_type = ""
+        for ph in sp.iter(q("p", "ph")):
+            ph_type = ph.get("type", "obj")
+            break
         kind = "shape"
         if ph_type in TEXT_REGION_PH:
             kind = "text_region"
         objs.append({
-            "obj_id": f"s{page_no:02d}_sp{z:03d}",
+            "obj_id": f"s{page_no:02d}_sp{z_cur:03d}",
             "page": page_no, "kind": kind,
             "shape_name": name, "text": text,
-            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z_cur,
             "source_media": "", "output_file": "",
             "original_format": "", "children": [],
             "ph_type": ph_type,
         })
-    # 连接符（箭头线）
-    for name, text, xfrm, z, s_id, e_id in iter_connectors(slide_xml):
+        z_cur += 1
+
+    # ---- 4) 连接符（非组内）----
+    for cxn in root.iter(CXNSP):
+        if in_group(cxn):
+            continue
+        name = shape_name(cxn)
+        text = _sp_text(cxn)
+        xfrm = _find_xfrm(cxn)
+        if xfrm is None:
+            continue
+        s_id = e_id = ""
+        for c in cxn.iter(q("a", "stCxn")):
+            s_id = c.get("id", "")
+        for c in cxn.iter(q("a", "endCxn")):
+            e_id = c.get("id", "")
         objs.append({
-            "obj_id": f"s{page_no:02d}_cn{z:03d}",
+            "obj_id": f"s{page_no:02d}_cn{z_cur:03d}",
             "page": page_no, "kind": "connector",
             "shape_name": name, "text": text or "",
-            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z_cur,
             "source_media": "", "output_file": "",
             "original_format": "", "children": [],
             "start_shape_id": s_id, "end_shape_id": e_id,
         })
-    # 表格
-    for name, rows, xfrm, z in iter_tables(slide_xml):
+        z_cur += 1
+
+    # ---- 5) 表格（非组内 graphicFrame）----
+    for gf in root.iter(GRAPHICFRAME):
+        if in_group(gf):
+            continue
+        tbl = gf.find(".//" + q("a", "tbl"))
+        if tbl is None:
+            continue
+        name = shape_name(gf)
+        rows = []
+        for tr in tbl.iter(q("a", "tr")):
+            row = []
+            for tc in tr.iter(q("a", "tc")):
+                cells = [t.text or "" for t in tc.iter(q("a", "t"))]
+                row.append("".join(cells).strip())
+            rows.append(row)
+        xfrm = _find_xfrm(gf)
         objs.append({
-            "obj_id": f"s{page_no:02d}_tb{z:03d}",
+            "obj_id": f"s{page_no:02d}_tb{z_cur:03d}",
             "page": page_no, "kind": "table",
             "shape_name": name, "text": "",
-            "bbox": _xfrm_to_bbox(xfrm), "z_index": z,
+            "bbox": _xfrm_to_bbox(xfrm), "z_index": z_cur,
             "source_media": "", "output_file": "",
             "original_format": "", "children": rows,
         })
+        z_cur += 1
+
     objs.sort(key=lambda o: o["z_index"])
     return objs
 
@@ -823,23 +1058,41 @@ def _count_pptx_slides(pptx_path: str) -> int:
         return 0
 
 
-def render_pptx_pages(pptx_path: str, cache_dir: Path, dpi: int = 150):
-    """用 LibreOffice 把整份 pptx 渲染为逐页 PNG（index 0=第1页）。
-    依赖 soffice + pdftoppm，缺失则返回 None（优雅降级）。
-    缓存复用：cache_dir 已有完整页数（与 pptx 页数一致）时直接返回，
-    避免每次重跑 soffice/pdftoppm（大课件渲染可达数分钟）。"""
-    soffice = None
-    for t in _detect_rasterizer("soffice"):
-        if t[0] == "soffice":
-            soffice = t[1]
-            break
-    pdftoppm = None
-    for t in _detect_rasterizer("auto"):
-        if t[0] == "pdftoppm":
-            pdftoppm = t[1]
-            break
-    if not soffice or not pdftoppm:
+_COM_RENDER_SCRIPT = r"""
+import sys
+import win32com.client
+app = win32com.client.Dispatch("PowerPoint.Application")
+pres = app.Presentations.Open(sys.argv[1], ReadOnly=True, Untitled=False,
+                              WithWindow=False)
+try:
+    # ExportAsFixedFormat 完整参数：
+    # (Path, FixedFormatType=2=PDF, Intent=1=Screen, FrameSlides=False,
+    #  HandoutOrder=1, OutputType=1=Slides, PrintHiddenSlides=True,
+    #  PrintRange=None, RangeType=1=All, SlideShowName="",
+    #  IncludeDocProperties=False, KeepIRMSettings=False,
+    #  DocStructureTags=True, BitmapMissingFonts=False, UseISO19005_1=False)
+    pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True, None, 1,
+                             "", False, False, True, False, False)
+finally:
+    pres.Close()
+    app.Quit()
+"""
+
+
+def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
+                           dpi: int = 150, timeout: int = 240):
+    """v2.0：PowerPoint COM（pywin32）渲染通道——本机 Office 唯一渲染引擎。
+
+    流程：独立子进程执行 COM（Open → ExportAsFixedFormat 导出 PDF，
+    PowerPoint 原生渲染保真 100%）→ 主进程 PyMuPDF 逐页转 PNG。
+    **子进程隔离 + 超时**：win32com 无超时机制，PowerPoint 崩溃/无响应时
+    子进程被 timeout 终止（含进程树，PowerPoint 一并清理），主流程不阻塞。
+    不依赖、不回退 LibreOffice。无 pywin32/Office 或失败返回 None。"""
+    try:
+        import win32com.client  # noqa: F401  仅探测可用性
+    except Exception:
         return None
+    cache_dir = Path(cache_dir)
     n_slides = _count_pptx_slides(pptx_path)
     existing = sorted(cache_dir.glob("page-*.png")) \
         if cache_dir.is_dir() else []
@@ -847,26 +1100,79 @@ def render_pptx_pages(pptx_path: str, cache_dir: Path, dpi: int = 150):
         return existing
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        # 清掉不完整的旧 png，避免混用
         for old in cache_dir.glob("page-*.png"):
             try:
                 old.unlink()
             except OSError:
                 pass
-        subprocess.run([soffice, "--headless", "--convert-to", "pdf",
-                        "--outdir", str(cache_dir), str(pptx_path)],
-                       check=True, capture_output=True, timeout=600)
-        pdfs = sorted(cache_dir.glob("*.pdf"))
-        if not pdfs:
+        pdf_path = cache_dir / "_ppt_render.pdf"
+        # COM 渲染放独立子进程：超时杀进程树（python + PowerPoint），
+        # 避免 win32com 永久阻塞主流程
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _COM_RENDER_SCRIPT,
+             str(pptx_path), str(pdf_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            _, err_b = proc.communicate(timeout=timeout)
+            if proc.returncode != 0:
+                err = (err_b or b"").decode("utf-8", "ignore")[-200:]
+                print(f"[渲染] PowerPoint COM 子进程失败 rc={proc.returncode}：{err}",
+                      file=sys.stderr)
+                return None
+        except subprocess.TimeoutExpired:
+            # 杀进程树（python + PowerPoint）：COM 挂起时 PowerPoint 残留
+            # 会导致下次 Dispatch 连到残留实例再次挂起，必须一并清理
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=30)
+            except Exception:
+                pass
+            try:
+                # PowerPoint 是 DCOM 启动的独立进程，不在 python 进程树内，
+                # 需按映像名强杀（仅当本次渲染超时，确认是渲染挂起才杀）
+                subprocess.run(["taskkill", "/F", "/IM", "POWERPNT.EXE"],
+                               capture_output=True, timeout=30)
+            except Exception:
+                pass
+            print(f"[渲染] PowerPoint COM 渲染超时（>{timeout}s），"
+                  f"已终止 python 子进程树并清理 POWERPNT", file=sys.stderr)
             return None
-        pdf_path = pdfs[0]
-        subprocess.run([pdftoppm, "-r", str(dpi), "-png",
-                        str(pdf_path), str(cache_dir / "page")],
-                       check=True, capture_output=True, timeout=600)
+        if not pdf_path.is_file():
+            return None
+        # PDF → 逐页 PNG（PyMuPDF 优先，pdftoppm 兜底）
+        try:
+            import fitz  # PyMuPDF，纯 wheel 无外部依赖
+            doc = fitz.open(str(pdf_path))
+            for i in range(doc.page_count):
+                pix = doc.load_page(i).get_pixmap(dpi=dpi)
+                pix.save(str(cache_dir / f"page-{i + 1:02d}.png"))
+            doc.close()
+        except Exception:
+            pdftoppm = shutil.which("pdftoppm")
+            if not pdftoppm:
+                return None
+            subprocess.run([pdftoppm, "-r", str(dpi), "-png",
+                            str(pdf_path), str(cache_dir / "page")],
+                           check=True, capture_output=True, timeout=600)
         pages = sorted(cache_dir.glob("page-*.png"))
-        return pages or None
-    except Exception:  # pragma: no cover
+        if pages:
+            return pages
         return None
+    except Exception as e:  # pragma: no cover
+        print(f"[渲染] PowerPoint COM 渲染失败：{e}（已禁用 LibreOffice 回退）",
+              file=sys.stderr)
+        return None
+
+
+def render_pptx_pages(pptx_path: str, cache_dir: Path, dpi: int = 150):
+    """把整份 pptx 渲染为逐页 PNG（index 0=第1页）。
+
+    v2.0：仅使用 PowerPoint COM（pywin32，本机 Office）渲染，不再回退
+    LibreOffice。无 pywin32/Office 或渲染失败返回 None（优雅降级）。
+    缓存复用：cache_dir 已有完整页数（与 pptx 页数一致）时直接返回，
+    避免每次重跑（大课件渲染可达数分钟）。"""
+    return _render_pptx_pages_com(pptx_path, cache_dir, dpi)
 
 
 def emu_to_px(v, dpi):
@@ -1248,9 +1554,11 @@ def _emit_chart(zf, rels, slide_dir, page_no, idx, name, rid, xfrm, by_page,
 
 
 def _ensure_rendered(render_ctx):
-    """惰性渲染整份 pptx 为逐页 PNG（仅一次）；无工具时返回 None（降级）。"""
-    if render_ctx["pages"] is not None:
-        return render_ctx["pages"]
+    """惰性渲染整份 pptx 为逐页 PNG（仅一次）。渲染失败（None）时用哨兵
+    标记"已尝试"，避免每个 chart/formula 对象都重试渲染（连环超时）。"""
+    if render_ctx.get("render_tried"):
+        return render_ctx.get("pages")
+    render_ctx["render_tried"] = True
     render_ctx["pages"] = render_pptx_pages(
         render_ctx["pptx"], render_ctx["out"] / "_render_cache",
         dpi=render_ctx["dpi"])
@@ -1575,10 +1883,23 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
             slide_xml = zf.read(slide_path)
             root = ET.fromstring(slide_xml)
             parent = {c: p for p in root.iter() for c in p}
+
+            def _in_grp(el) -> bool:
+                cur = parent.get(el)
+                while cur is not None:
+                    if cur.tag == GRP:
+                        return True
+                    cur = parent.get(cur)
+                return False
+
             page_entries = []
 
             # --- 路径1：原生 OMML ---
+            # 规则 5（v2.0）：组合内公式归块内容（XML 段 + DeepSeek 转 LaTeX），
+            # 不写 formulas.md——此处排除祖先含 grpSp 的 oMath
             for om in root.iter(q("m", "oMath")):
+                if _in_grp(om):
+                    continue
                 disp = (parent.get(om) is not None
                         and parent[om].tag == q("m", "oMathPara"))
                 om_str = ET.tostring(om, encoding="unicode")
@@ -1591,7 +1912,8 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
                                      "display": disp, "name": "OMML公式"})
 
             # --- B 类：Equation OLE（仅 progId 含 equation 进公式清单）---
-            for (name, rid, xfrm, prog_id) in iter_ole_formulas(slide_xml):
+            for (name, rid, xfrm, prog_id) in iter_ole_formulas(
+                    slide_xml, skip_in_group=True):
                 if "equation" not in (prog_id or "").lower():
                     continue   # 照片/Visio 等非公式 OLE 不进公式清单（修 F1）
                 expected_eq += 1
