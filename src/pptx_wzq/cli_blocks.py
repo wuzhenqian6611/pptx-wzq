@@ -732,37 +732,41 @@ def _main(argv=None) -> int:
         stem = Path(args.pptx).stem
     image_dir = out_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
-    # 清空旧块渲染图（块编号随规则变化，避免旧图残留造成 引用数≠文件数）
-    for old in image_dir.glob("slide_*_blk_*.png"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
     n_rendered = 0
-    if args.pptx and args.pptx.is_file():
-        from pptx_wzq import extract_pptx_images as E
-        # 单次整页渲染（缓存按课件名分目录 .render_cache/<stem>），再按块 bbox 裁剪，
-        # 避免同目录多课件页数恰好 ≥ 时误用别的课件的渲染结果（战略管理 23 页
-        # vs 逻辑体系 20 页实测）；也避免每个块重复跑 PowerPoint 渲染
-        cache = Path(args.pptx).parent / ".render_cache" / Path(args.pptx).stem
-        render_dpi = getattr(args, "render_dpi", 150)
-        pages = E.render_pptx_pages(str(args.pptx), cache, dpi=render_dpi)
-        # 真实页面尺寸（EMU）：16:9 等非常规比例必须传入，否则裁剪
-        # 按 4:3 默认值换算会把块的左侧内容切掉（战略管理实测）
-        sld_cx, sld_cy = E.read_sld_size(str(args.pptx))
-        if pages:
-            for s in slides:
-                for blk in s["blocks"]:
-                    img_path = image_dir / \
-                        f"slide_{s['page']:02d}_{blk['block_id']}.png"
-                    if img_path.is_file():
-                        n_rendered += 1
-                        continue
-                    ok = _crop_block_png(pages, s["page"], blk, img_path,
-                                         render_dpi,
-                                         sld_cx=sld_cx, sld_cy=sld_cy)
-                    if ok:
-                        n_rendered += 1
+    if not args.caption_sources:
+        # 结构阶段（blocks 步骤）才清空旧块渲染图并重建：
+        # caption 步骤（--caption-sources，cli_paser ④）只消费 sources/ 做解读，
+        # **不得碰 images/**——否则会把 blocks 步骤已生成的渲染图清空且不重建
+        # （若本次渲染失败则 images/ 永久为空；实测隐患）
+        for old in image_dir.glob("slide_*_blk_*.png"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        if args.pptx and args.pptx.is_file():
+            from pptx_wzq import extract_pptx_images as E
+            # 单次整页渲染（缓存按课件名分目录 .render_cache/<stem>），再按块 bbox 裁剪，
+            # 避免同目录多课件页数恰好 ≥ 时误用别的课件的渲染结果（战略管理 23 页
+            # vs 逻辑体系 20 页实测）；也避免每个块重复跑 PowerPoint 渲染
+            cache = Path(args.pptx).parent / ".render_cache" / Path(args.pptx).stem
+            render_dpi = getattr(args, "render_dpi", 150)
+            pages = E.render_pptx_pages(str(args.pptx), cache, dpi=render_dpi)
+            # 真实页面尺寸（EMU）：16:9 等非常规比例必须传入，否则裁剪
+            # 按 4:3 默认值换算会把块的左侧内容切掉（战略管理实测）
+            sld_cx, sld_cy = E.read_sld_size(str(args.pptx))
+            if pages:
+                for s in slides:
+                    for blk in s["blocks"]:
+                        img_path = image_dir / \
+                            f"slide_{s['page']:02d}_{blk['block_id']}.png"
+                        if img_path.is_file():
+                            n_rendered += 1
+                            continue
+                        ok = _crop_block_png(pages, s["page"], blk, img_path,
+                                             render_dpi,
+                                             sld_cx=sld_cx, sld_cy=sld_cy)
+                        if ok:
+                            n_rendered += 1
 
     # 兜底清理：images/ 只保留 JSON 中可视逻辑块对应的渲染图
     # （块编号随规则变化后，旧图/无结构引用图必须移除，保证目录与
