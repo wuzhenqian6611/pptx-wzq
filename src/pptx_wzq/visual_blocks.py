@@ -137,6 +137,7 @@ class AtomicObject:
     output_file: str = ""
     original_format: str = ""
     children: list = field(default_factory=list)
+    preview_of: str = ""   # v2.6：OLE 预览图标记（formula/visio/ole，空=剪贴画/真图）
 
     @classmethod
     def from_dict(cls, d: dict) -> "AtomicObject":
@@ -152,6 +153,7 @@ class AtomicObject:
             output_file=d.get("output_file", ""),
             original_format=d.get("original_format", ""),
             children=d.get("children") or [],
+            preview_of=d.get("preview_of", ""),
         )
 
 
@@ -1185,6 +1187,10 @@ def extract_blocks(pptx_path: str, out_dir: str,
 
         for o in sorted(objs, key=lambda x: x.z_index):
             if o.kind not in ("group", "visio", "vector", "raster"):
+                continue
+            # v2.6：OLE 预览图（公式/Visio/嵌入对象快照）不独立成图块——
+            # 公式语义走 formulas.md，Visio 取原生 .vsdx，预览图只是显示快照
+            if o.kind in ("vector", "raster") and o.preview_of:
                 continue
             members = [o]
             if o.kind == "raster":

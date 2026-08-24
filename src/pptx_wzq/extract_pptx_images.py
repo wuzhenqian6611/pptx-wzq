@@ -401,11 +401,14 @@ def iter_background_chain(zf: zipfile.ZipFile, slide_path: str, slide_rels_full:
 # 公式对象（oleObj / OMML）与图表（graphicFrame）遍历
 # --------------------------------------------------------------------------
 def iter_ole_formulas(slide_xml: bytes, skip_in_group: bool = False):
-    """扫描 OLE 对象（公式编辑器 / 嵌入对象），返回 (shape_name, embed_rid, xfrm, prog_id)。
+    """扫描 OLE 对象（公式编辑器 / 嵌入对象），返回
+    (shape_name, embed_rid, xfrm, prog_id, in_group)。
     真实课件中 OLE 常位于 <p:graphicFrame> 内（少数在 <p:sp>），且 r:id 直接挂在
     <p:oleObj> 上（不一定有嵌套 <p:oleObjEmbed>）。progId 含 'equation' 即公式编辑器。
 
-    v2.0：skip_in_group=True 时跳过祖先含 grpSp 的 OLE（组合内 OLE 归块内容，规则 5）。"""
+    v2.0：skip_in_group=True 时跳过祖先含 grpSp 的 OLE（组合内 OLE 归块内容，规则 5）。
+    v2.6：返回 in_group 标记——组合内公式**也进 formulas.md**（语义存档），
+    同时保留在组合块 XML 段内（双通道，不再依赖 skip 排除）。"""
     root = ET.fromstring(slide_xml)
     pmap = {c: p for p in root.iter() for c in p}
 
@@ -419,7 +422,8 @@ def iter_ole_formulas(slide_xml: bytes, skip_in_group: bool = False):
 
     for parent_tag in (GRAPHICFRAME, SP):
         for el in root.iter(parent_tag):
-            if skip_in_group and _in_grp(el):
+            ig = _in_grp(el)
+            if skip_in_group and ig:
                 continue
             ole = el.find(".//" + OLEOBJ)
             if ole is None:
@@ -438,7 +442,7 @@ def iter_ole_formulas(slide_xml: bytes, skip_in_group: bool = False):
             if not name:
                 name = "Equation" if "equation" in prog_id else "OLEObject"
             xfrm = _find_xfrm(el)
-            yield name, rid, xfrm, prog_id
+            yield name, rid, xfrm, prog_id, ig
 
 
 def iter_omath(slide_xml: bytes):
@@ -592,8 +596,50 @@ def _extract_grp_segments(text: str) -> list:
     return segs
 
 
+def _detect_preview_flags(slide_xml: bytes, rels: dict | None) -> dict:
+    """v2.6 预览图判定：对每个 <p:pic>，检查其前 300 字符内是否有 <p:oleObj>——
+    是则判定该图片为 OLE 对象（公式/Visio/嵌入）的显示预览图。
+    返回 {原始媒体文件名: "formula"|"visio"|"ole"}。
+    公式预览图不独立成图块（语义走 formulas.md）；Visio 预览图不独立成块
+    （原生 .vsdx 已提取）；剪贴画（无 oleObj 紧邻）维持 vector 图块。"""
+    if not rels:
+        return {}
+    xml_text = slide_xml.decode("utf-8", "ignore")
+    ole_markers = []  # (位置, progId 小写)
+    for m in re.finditer(r'<p:oleObj[^>]*>', xml_text):
+        pm = re.search(r'progId="([^"]*)"', m.group(0))
+        ole_markers.append((m.start(), (pm.group(1) if pm else "").lower()))
+    if not ole_markers:
+        return {}
+    flags = {}
+    for pm in re.finditer(r'<p:pic>.*?</p:pic>', xml_text, re.S):
+        em = re.search(r'r:(?:embed|link)="(rId\d+)"', pm.group(0))
+        if not em:
+            continue
+        rel_v = rels.get(em.group(1))
+        if isinstance(rel_v, dict):
+            tgt = (rel_v.get("Target") or "").replace("\\", "/").split("/")[-1]
+        else:
+            tgt = (rel_v or "").replace("\\", "/").split("/")[-1]
+        if not tgt:
+            continue
+        flag = ""
+        for opos, prog in reversed(ole_markers):
+            if opos < pm.start() and pm.start() - opos <= 300:
+                if "equation" in prog:
+                    flag = "formula"
+                elif "visio" in prog:
+                    flag = "visio"
+                else:
+                    flag = "ole"
+                break
+        if flag:
+            flags[tgt] = flag
+    return flags
+
+
 def _collect_atomic_objects(page_no: int, slide_xml: bytes,
-                            page_records: list) -> list:
+                            page_records: list, rels: dict | None = None) -> list:
     """把本页的图片记录（ImageRecord）与 shape/connector/table 统一映射为
     原子对象 dict 列表（按 z_index 排序）。图片记录缺 z_index 时排在 shape 之后。
 
@@ -603,9 +649,12 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
       嵌套 grpSp 只作 children（规则 2）。
     - 组内元素不生成顶层独立原子对象（规则 1）。
     - 非组合 Visio → kind="visio"（新增分支，修根因 F，规则 3）。
+    v2.6：pic 前 300 字符内有 oleObj → preview_of（formula/visio/ole），
+    预览图不独立成图块（visual_blocks 消费该字段跳过成块）。
     """
     root = ET.fromstring(slide_xml)
     objs: list = []
+    preview_flags = _detect_preview_flags(slide_xml, rels)
     TEXT_REGION_PH = {"title", "ctrTitle", "subTitle", "body", "obj"}
     # 原始文本中的 grpSp 段（保留 p:/a:/r: 前缀，可读性优化）
     grp_segs = _extract_grp_segments(slide_xml.decode("utf-8", "ignore"))
@@ -662,7 +711,10 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                                  "output_file": (rec.output_file if rec else "") or "",
                                  "src_rect": list(sr) if sr else None,
                                  "original_format": ((rec.original_format or "").lower()
-                                                     if rec else "")})
+                                                     if rec else ""),
+                                 "preview_of": preview_flags.get(
+                                     Path(rec.source_media or "").name, "")
+                                 if rec else ""})
             elif tag == CXNSP:
                 t = _sp_text(el)
                 if t:
@@ -747,6 +799,8 @@ def _collect_atomic_objects(page_no: int, slide_xml: bytes,
                 "source_media": rec.source_media or "",
                 "output_file": rec.output_file or "",
                 "original_format": fmt,
+                "preview_of": preview_flags.get(
+                    Path(rec.source_media or "").name, ""),
                 "children": [],
             })
         elif kind == "visio":   # ★ 新增分支（规则 3，修根因 F）
@@ -1341,7 +1395,8 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
                 records.append(rec)
 
             # 4) 公式对象（oleObj → embeddings/oleObjectN.bin；Visio → .vsdx/.vsd）
-            for idx, (name, rid, xfrm, prog_id) in enumerate(iter_ole_formulas(slide_xml), start=1):
+            for idx, (name, rid, xfrm, prog_id, _ig) in enumerate(
+                    iter_ole_formulas(slide_xml), start=1):
                 rec = _emit_ole(zf, rels, slide_dir, page_no, idx, name, rid,
                                 xfrm, by_page, render_ctx, prog_id)
                 if xfrm is not None:
@@ -1377,7 +1432,7 @@ def extract(pptx_path: str, out_dir: str, convert: bool = True,
             #    图片记录映射）。每页按 z_index 顺序输出。
             if with_atomic:
                 atomic_objects.extend(_collect_atomic_objects(
-                    page_no, slide_xml, records[rec_start:]))
+                    page_no, slide_xml, records[rec_start:], rels_full))
 
             # 进度回调（可选，默认 None 不改变任何行为）
             if on_progress is not None:
@@ -1790,7 +1845,8 @@ def _make_math_ocr(engine: str = "auto"):
 
 def _fmt_entry(page_no, idx, e):
     """把一条公式条目格式化为 markdown。source ∈ omml|eq3|ocr|placeholder。"""
-    head = f"- **(p{page_no}-f{idx})** "
+    tag = "（组合内公式）" if e.get("in_group") else ""
+    head = f"- **(p{page_no}-f{idx})** {tag}".rstrip() + " "
     src = e["source"]
     if src == "omml":
         if e["ok"] and e["latex"].strip():
@@ -1927,11 +1983,10 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
             page_entries = []
 
             # --- 路径1：原生 OMML ---
-            # 规则 5（v2.0）：组合内公式归块内容（XML 段 + DeepSeek 转 LaTeX），
-            # 不写 formulas.md——此处排除祖先含 grpSp 的 oMath
+            # v2.6：组合内 OMML 也进 formulas.md（in_group 标注）；同时保留
+            # 在组合块 XML 段内（双通道）
             for om in root.iter(q("m", "oMath")):
-                if _in_grp(om):
-                    continue
+                ig = _in_grp(om)
                 disp = (parent.get(om) is not None
                         and parent[om].tag == q("m", "oMathPara"))
                 om_str = ET.tostring(om, encoding="unicode")
@@ -1941,11 +1996,14 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
                 latex, ok = _convert_one(omml_conv, om_str)
                 page_entries.append({"source": "omml", "omml": om_str,
                                      "latex": latex, "ok": ok,
-                                     "display": disp, "name": "OMML公式"})
+                                     "display": disp, "name": "OMML公式",
+                                     "in_group": ig})
 
             # --- B 类：Equation OLE（仅 progId 含 equation 进公式清单）---
-            for (name, rid, xfrm, prog_id) in iter_ole_formulas(
-                    slide_xml, skip_in_group=True):
+            # v2.6：组合内公式**也进 formulas.md**（in_group 标注），
+            # 同时保留在组合块 XML 段内（双通道，规则 5 语义升级）
+            for (name, rid, xfrm, prog_id, in_grp) in iter_ole_formulas(
+                    slide_xml):
                 if "equation" not in (prog_id or "").lower():
                     continue   # 照片/Visio 等非公式 OLE 不进公式清单（修 F1）
                 expected_eq += 1
@@ -1960,7 +2018,8 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
                 if ok and latex.strip():
                     counts["eq3"] += 1
                     page_entries.append({"source": "eq3", "latex": latex,
-                                         "ok": True, "name": name, "is_eq": True})
+                                         "ok": True, "name": name, "is_eq": True,
+                                         "in_group": in_grp})
                     continue
 
                 # 路径3：LO 渲染整页 + xfrm 裁剪 + 数学 OCR
@@ -1982,12 +2041,14 @@ def extract_latex(pptx_path, out_dir, do_lo: bool = True,
                                     "source": "ocr", "latex": ocr_latex,
                                     "ok": True, "crop_png": crop_png,
                                     "ocr_engine": ocr_engine,
-                                    "name": name, "is_eq": True})
+                                    "name": name, "is_eq": True,
+                                    "in_group": in_grp})
                                 continue
                 # 全失败 → 占位
                 counts["placeholder"] += 1
                 page_entries.append({"source": "placeholder", "name": name,
-                                     "is_eq": True, "crop_png": crop_png})
+                                     "is_eq": True, "crop_png": crop_png,
+                                     "in_group": in_grp})
 
             if page_entries:
                 entries_by_page[page_no] = page_entries
