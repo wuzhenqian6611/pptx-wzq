@@ -341,6 +341,20 @@ def _make_batches(target: list, by_page: dict, subject: str,
     return batches
 
 
+def _tidy_direct(texts: list) -> str:
+    """直出页轻度整理：按原文顺序拼接，去纯空白行、合并相邻重复行。
+    尽量不改变原文意思、尽量不增加字数（v2.2 直出整理规则）。"""
+    out = []
+    for t in texts:
+        line = t.strip()
+        if not line:
+            continue
+        if out and out[-1] == line:
+            continue  # 相邻重复行（PPT 版式常见）只保留一次
+        out.append(line)
+    return "\n".join(out)
+
+
 def author_textbook(by_page: dict, pages: list, out_path: Path,
                     subject: str, model: str = DEFAULT_MODEL,
                     base_url: str = DEFAULT_BASE_URL,
@@ -349,14 +363,16 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                     max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
                     max_pages_per_batch: int = DEFAULT_MAX_PAGES_PER_BATCH,
                     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
-                    no_expand_threshold: int = 300,
+                    no_expand_threshold: int = 500,
                     on_progress=None):
     """生成整份教材文案 md 并落盘；自适应分批，结果合并到一个文件。
 
-    - 需求3：逐页预检——该页原始文本（texts 条目拼接、去空白）超过
-      no_expand_threshold（默认 300）字时，**不调用模型**，直接以原文
-      作为该页文案（加「未作扩写」标注），省 Token；
-    - 其余页走模型生成；输入/输出体量超限 → 按页自动分批
+    v2.2 撰写规则（**500 字为限**）：
+    - 该页原始文本（texts 条目拼接、去空白）**≤ 500 字** → 模型扩写到
+      **不少于 500 字**；
+    - 该页原始文本 **> 500 字** → **直出整理**（_tidy_direct：轻度整理，
+      尽量不改变原文意思、尽量不增加字数），不调用模型，省 Token；
+    - 输入/输出体量超限 → 按页自动分批
       （每批受输入字符/页数/估算输出三重约束）；
     - 各页结果按页序统一合并写出（直出页与模型页顺序一致）。
     - pages_filter 给定（如 [1,4]）时，只处理目标页（小批量测试）。
@@ -368,17 +384,18 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
     target = pages if pages_filter is None else \
         [p for p in pages if p in pages_filter]
 
-    # 需求3：原文超阈值页 → 直出，不调用模型
+    # 500 字为限：原文超阈值页 → 直出整理，不调用模型
     direct = {}
     if no_expand_threshold:
         for p in target:
             raw = "".join(by_page[p]["texts"]).replace(" ", "").replace("\n", "")
             if len(raw) > no_expand_threshold:
-                direct[p] = "\n".join(by_page[p]["texts"])
+                direct[p] = _tidy_direct(by_page[p]["texts"])
     model_target = [p for p in target if p not in direct]
     if direct:
         print(f"[直出] {len(direct)} 页原文超过 {no_expand_threshold} 字，"
-              f"直接提取不扩写：页 {'、'.join(map(str, sorted(direct)))}",
+              f"直出整理（不改原意、不增字数）："
+              f"页 {'、'.join(map(str, sorted(direct)))}",
               file=sys.stderr)
 
     results = {}          # page -> 页节内容（不含标题行）
@@ -446,7 +463,8 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                 continue
             f.write(f"## 第 {p} 页\n\n")
             if p in direct:
-                f.write(f"> 原文直出（超过 {no_expand_threshold} 字，未扩写）。\n\n")
+                f.write(f"> 直出整理（原文超过 {no_expand_threshold} 字，"
+                        f"保留原意、尽量不增字数）。\n\n")
             f.write(f"{content}\n\n")
         f.write("---\n\n"
                 f"共 {len(target)} 页（{len(direct)} 页直出 + {len(model_target)} 页模型，"
@@ -522,11 +540,12 @@ def _main(argv=None) -> int:
                     default=DEFAULT_MAX_OUTPUT_CHARS,
                     help=f"单批估算输出字符上限（默认 {DEFAULT_MAX_OUTPUT_CHARS}；"
                          f"按每页600字折算页数上限）")
-    ap.add_argument("--no-expand-threshold", type=int, default=0,
+    ap.add_argument("--no-expand-threshold", type=int, default=500,
                     help="原文直出阈值：某页原始文本（去空白）超过该字数时"
-                         "不调用模型扩写，直接以原文作为教材文案（默认 0："
-                         "关闭直出，**每页一律由模型扩写到不少于 500 字**；"
-                         "如需省 Token 可设 300+）")
+                         "**直出整理**（轻度整理、不改原意、尽量不增字数），"
+                         "不再扩写；否则由模型扩写到不少于 500 字"
+                         "（默认 500：不足 500 扩写、超 500 直出；"
+                         "0 关闭直出全部扩写）")
     ap.add_argument("--json", action="store_true",
                     help="结构化统计输出到 stdout")
     ap.add_argument("--version", action="version", version=VERSION)
