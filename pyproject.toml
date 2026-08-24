@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pptx-wzq"
-version = "2.5.0"
+version = "2.5.1"
 description = "PPT 多模态教学知识库自动化构建：文本/公式/图片提取（含 vsdx 与矢量规范化、文本坐标）→ 可视逻辑块解析（空间聚类+Semantic Captioning+拓扑+跨模态关系）→ 相关性过滤 → 教材文案（300字直出）→ 交付物体系对齐 word-wzq → 教材HTML/Deck；断点续传+日志"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,6 +26,7 @@ dependencies = [
     "ultralytics>=8.0",
     "omml2latex>=0.1.1",
     "pywin32>=306; platform_system == 'Windows'",
+    "pymupdf>=1.24.0",
 ]
 
 [project.optional-dependencies]

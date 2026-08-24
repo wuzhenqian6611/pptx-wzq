@@ -1091,6 +1091,9 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
     try:
         import win32com.client  # noqa: F401  仅探测可用性
     except Exception:
+        print(f"[渲染] 缺少 pywin32：`pip install pywin32` 后重跑；"
+              f"无渲染图（images/ 将为空），其余产物不受影响",
+              file=sys.stderr)
         return None
     cache_dir = Path(cache_dir)
     n_slides = _count_pptx_slides(pptx_path)
@@ -1139,6 +1142,10 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
                   f"已终止 python 子进程树并清理 POWERPNT", file=sys.stderr)
             return None
         if not pdf_path.is_file():
+            print(f"[渲染] PowerPoint COM 导出 PDF 失败（{pdf_path.name} 未生成）："
+                  f"请检查本机是否已安装 Microsoft PowerPoint；"
+                  f"无渲染图（images/ 将为空），其余产物不受影响",
+                  file=sys.stderr)
             return None
         # PDF → 逐页 PNG（PyMuPDF 优先，pdftoppm 兜底）
         try:
@@ -1151,6 +1158,11 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
         except Exception:
             pdftoppm = shutil.which("pdftoppm")
             if not pdftoppm:
+                print(f"[渲染] PDF→PNG 转换失败：缺少 PyMuPDF（pymupdf），"
+                      f"且 pdftoppm 也不可用。请执行 "
+                      f"`pip install pymupdf` 后重跑；"
+                      f"无渲染图（images/ 将为空），其余产物不受影响",
+                      file=sys.stderr)
                 return None
             subprocess.run([pdftoppm, "-r", str(dpi), "-png",
                             str(pdf_path), str(cache_dir / "page")],
@@ -1158,6 +1170,8 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
         pages = sorted(cache_dir.glob("page-*.png"))
         if pages:
             return pages
+        print(f"[渲染] PDF 已生成但逐页 PNG 为空（{cache_dir}）："
+              f"无渲染图（images/ 将为空），其余产物不受影响", file=sys.stderr)
         return None
     except Exception as e:  # pragma: no cover
         print(f"[渲染] PowerPoint COM 渲染失败：{e}（已禁用 LibreOffice 回退）",
