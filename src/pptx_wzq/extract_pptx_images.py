@@ -1112,13 +1112,27 @@ def _count_pptx_slides(pptx_path: str) -> int:
         return 0
 
 
+def _kill_proc_tree(proc) -> None:
+    """超时清理：杀 python 子进程树 + 残留的演示应用（PowerPoint/WPS）。
+    COM 挂起时演示应用残留会导致下次 Dispatch 连到残留实例再次挂起。"""
+    try:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, timeout=15)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 _COM_RENDER_SCRIPT = r"""
 import sys
 import win32com.client
-# DispatchEx：创建**独立** PowerPoint COM 实例（PowerPoint 是单实例应用，
-# Dispatch 会连接到用户正在使用的实例；若该文件正被用户 PowerPoint 编辑，
-# Open 会失败并报 0x80070002 文件不可用）。独立实例互不干扰。
-app = win32com.client.DispatchEx("PowerPoint.Application")
+# sys.argv[3] = 演示应用 ProgID：PowerPoint.Application（MS Office）/
+# Kwpp.Application（WPS 演示）。DispatchEx 创建**独立**实例（演示应用是单实例
+# 应用，Dispatch 会连到用户正在使用的实例；若该文件正被用户编辑，Open 会失败
+# 报 0x80070002）。独立实例互不干扰。
+app = win32com.client.DispatchEx(sys.argv[3])
 try:
     try:
         pres = app.Presentations.Open(sys.argv[1], ReadOnly=True,
@@ -1129,21 +1143,22 @@ try:
         # 0x80070002 = ERROR_FILE_NOT_FOUND：文件被占用/不可用最常见
         if "0x80070002" in err or "80070002" in err:
             print("[OPEN_FAIL] 文件不可用（0x80070002）：很可能该 PPT 正被"
-                  " PowerPoint 打开编辑，请先关闭它再运行；或路径错误。",
+                  " PowerPoint/WPS 打开编辑，请先关闭它再运行；或路径错误。",
                   file=sys.stderr)
         else:
             print(f"[OPEN_FAIL] 打开失败：{e}", file=sys.stderr)
         print(err[-600:], file=sys.stderr)
         raise
     try:
-        # ExportAsFixedFormat 完整参数：
-        # (Path, FixedFormatType=2=PDF, Intent=1=Screen, FrameSlides=False,
-        #  HandoutOrder=1, OutputType=1=Slides, PrintHiddenSlides=True,
-        #  PrintRange=None, RangeType=1=All, SlideShowName="",
-        #  IncludeDocProperties=False, KeepIRMSettings=False,
-        #  DocStructureTags=True, BitmapMissingFonts=False, UseISO19005_1=False)
-        pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True, None, 1,
-                                 "", False, False, True, False, False)
+        try:
+            # ExportAsFixedFormat 完整参数（MS Office 13 参签名）：
+            pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True,
+                                     None, 1, "", False, False, True,
+                                     False, False)
+        except Exception:
+            # 简化参数回退（WPS 等兼容实现不支持 13 参签名）：
+            # (Path, FixedFormatType=2=PDF, Intent=1=Screen)
+            pres.ExportAsFixedFormat(sys.argv[2], 2, 1)
     finally:
         pres.Close()
 finally:
@@ -1151,15 +1166,34 @@ finally:
 """
 
 
+def _detect_render_progid() -> str:
+    """探测可用的演示渲染 COM ProgID：MS PowerPoint → WPS 演示(Kwpp)。
+    读注册表（含 32/64 位视图）判定，避免启动 COM 实例探测。"""
+    import winreg as _wr
+    for prog in ("PowerPoint.Application", "Kwpp.Application"):
+        for view in (_wr.KEY_READ,
+                     _wr.KEY_READ | _wr.KEY_WOW64_64KEY,
+                     _wr.KEY_READ | _wr.KEY_WOW64_32KEY):
+            try:
+                with _wr.OpenKey(_wr.HKEY_CLASSES_ROOT, prog, 0, view) as k:
+                    _wr.QueryValueEx(k, "CLSID")
+                return prog
+            except OSError:
+                continue
+    return "PowerPoint.Application"  # 默认首选（探测不到时兜底，让子进程报错提示）
+
+
 def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
                            dpi: int = 150, timeout: int = 240):
-    """v2.0：PowerPoint COM（pywin32）渲染通道——本机 Office 唯一渲染引擎。
+    """v2.0：演示应用 COM（pywin32）渲染通道——本机 Office/WPS 渲染引擎。
 
     流程：独立子进程执行 COM（Open → ExportAsFixedFormat 导出 PDF，
-    PowerPoint 原生渲染保真 100%）→ 主进程 PyMuPDF 逐页转 PNG。
-    **子进程隔离 + 超时**：win32com 无超时机制，PowerPoint 崩溃/无响应时
-    子进程被 timeout 终止（含进程树，PowerPoint 一并清理），主流程不阻塞。
-    不依赖、不回退 LibreOffice。无 pywin32/Office 或失败返回 None。"""
+    Office 原生渲染保真 100%）→ 主进程 PyMuPDF 逐页转 PNG。
+    v3.1.0：ProgID 探测（MS PowerPoint → WPS Kwpp），有 Office 用 Office、
+    只有 WPS 用 WPS；子进程失败自动换备选 ProgID 重试一次。
+    **子进程隔离 + 超时**：win32com 无超时机制，演示应用崩溃/无响应时
+    子进程被 timeout 终止（含进程树，应用一并清理），主流程不阻塞。
+    不依赖、不回退 LibreOffice。无 pywin32/Office/WPS 或失败返回 None。"""
     try:
         import win32com.client  # noqa: F401  仅探测可用性
     except Exception:
@@ -1173,6 +1207,9 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
         if cache_dir.is_dir() else []
     if n_slides and len(existing) >= n_slides:
         return existing
+    progids = [_detect_render_progid(),
+               "Kwpp.Application" if _detect_render_progid()
+               != "Kwpp.Application" else "PowerPoint.Application"]
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         for old in cache_dir.glob("page-*.png"):
@@ -1181,23 +1218,41 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
             except OSError:
                 pass
         pdf_path = cache_dir / "_ppt_render.pdf"
-        # COM 渲染放独立子进程：超时杀进程树（python + PowerPoint），
-        # 避免 win32com 永久阻塞主流程
-        proc = subprocess.Popen(
-            [sys.executable, "-c", _COM_RENDER_SCRIPT,
-             str(pptx_path), str(pdf_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            _, err_b = proc.communicate(timeout=timeout)
+        last_err = ""
+        for progid in progids:
+            if pdf_path.is_file():
+                try:
+                    pdf_path.unlink()
+                except OSError:
+                    pass
+            # COM 渲染放独立子进程：超时杀进程树（python + 演示应用），
+            # 避免 win32com 永久阻塞主流程
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _COM_RENDER_SCRIPT,
+                 str(pptx_path), str(pdf_path), progid],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                _, err_b = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_proc_tree(proc)
+                print(f"[渲染] {progid} COM 渲染超时（>{timeout}s），"
+                      f"已终止 python 子进程树并清理", file=sys.stderr)
+                last_err = "timeout"
+                continue
             if proc.returncode != 0:
-                # v3.0.2：完整显示子进程 stderr（含 OPEN_FAIL 可读提示），
-                # 不再只截尾部 200 字符（会把原因提示截掉只剩 traceback）
-                err = (err_b or b"").decode("utf-8", "ignore").strip()
-                print(f"[渲染] PowerPoint COM 子进程失败 rc={proc.returncode}：",
+                # v3.0.2：完整显示子进程 stderr（含 OPEN_FAIL 可读提示）
+                last_err = (err_b or b"").decode("utf-8", "ignore").strip()
+                print(f"[渲染] {progid} COM 子进程失败 rc={proc.returncode}：",
                       file=sys.stderr)
-                print(f"        {err}", file=sys.stderr)
-                return None
-        except subprocess.TimeoutExpired:
+                print(f"        {last_err}", file=sys.stderr)
+                continue
+            # 成功：PDF 已生成
+            break
+        else:
+            if last_err:
+                print(f"[渲染] 所有演示应用（{' / '.join(progids)}）渲染均失败",
+                      file=sys.stderr)
+            return None
             # 杀进程树（python + PowerPoint）：COM 挂起时 PowerPoint 残留
             # 会导致下次 Dispatch 连到残留实例再次挂起，必须一并清理
             try:
