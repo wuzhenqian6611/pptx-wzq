@@ -2,7 +2,9 @@
 
 > **作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063**
 > 本项目帮助高校教师把教学 PPT 自动转化为**图文并茂、可检索、可复用、可再加工**的多模态教学知识库。
-> 当前版本：**3.1.2**（PyPI：https://pypi.org/project/pptx-wzq/ · GitHub：https://github.com/wuzhenqian6611/pptx-wzq）
+> 当前版本：**3.1.3**（PyPI：https://pypi.org/project/pptx-wzq/ · GitHub：https://github.com/wuzhenqian6611/pptx-wzq）
+
+**开发原因**：高校教师在课程建设与教材建设中，长期面临「课件里的大量图片、公式、文本散落各处，难以整理为规范、可复用、图文并茂的教学资源」的痛点——手工整理一份课程的图文知识库往往要耗费数周。本工具把 PPT 自动转化为图文并茂的多模态教学知识库，让教师从机械整理中解放出来。
 
 ---
 
@@ -268,6 +270,7 @@ pptx-paser "C:\课件\战略管理.pptx" -o out
 | 3.1.0 | **WPS 渲染支持**：ProgID 自动探测（PowerPoint.Application → Kwpp.Application）+ ExportAsFixedFormat 简化参数回退 |
 | 3.1.1 | **qwen 视觉兜底按需触发**：仅 caption 未解读的块读渲染图（调用 73→13）；图路径接通 images/（修复此前"从未真正读图"） |
 | 3.1.2 | 文档体系更新：README/使用手册/技术分析同步 3.0.x~3.1.x 全部变更（渲染通道、性能优化、实时打印、按需兜底） |
+| 3.1.3 | README 补「开发原因」；**PyPI 主页显示完整 README**（wheel METADATA 携带 long_description） |
 
 ## 十三、文档与许可
 

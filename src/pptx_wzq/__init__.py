@@ -1,4 +1,4 @@
-__version__ = "3.1.2"
+__version__ = "3.1.3"
 __all__ = ["cli_common", "extract_pptx_images", "img_filter", "pptrender",
            "visual_blocks",
            "cli_img", "cli_formula", "cli_text", "cli_caption", "cli_blocks",
