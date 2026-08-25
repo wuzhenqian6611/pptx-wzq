@@ -46,6 +46,8 @@ JUDGE_SYSTEM = (
     "二维码、联系方式等与知识点无关的内容。\n"
     "优先保留讲解知识点、原理、电路、结构、数据、流程、示例、波形、图表"
     "等内容的图片。\n"
+    "**重要：如果正文为空或依据不足、无法确认相关性时，请输出 keep=true "
+    "（默认保留，不得因无法确认而删除）。**\n"
     "只输出 JSON：{\"keep\": true 或 false, \"reason\": \"相关 | 具体不相关"
     "原因（如：logo/作者信息/单位名称/项目类别/每页重复装饰/其他）\"}"
 )
@@ -93,7 +95,8 @@ def parse_caption_entries(path: Path) -> list:
 
 def _judge_one(client, model: str, caption: str, page_text: str,
                retries: int = 1) -> tuple:
-    """DeepSeek 判定相关性 → (keep: bool, reason: str)。失败默认保留。"""
+    """DeepSeek 判定相关性 → (keep: bool, reason: str)。失败默认保留。
+    v3.0.1：普通生成（去 thinking），相关性二分类无需深度思考。"""
     try:
         messages = [
             {"role": "system", "content": JUDGE_SYSTEM},
@@ -109,8 +112,6 @@ def _judge_one(client, model: str, caption: str, page_text: str,
                       f"{caption[:200]}…", file=sys.stderr)
                 resp = client.chat.completions.create(
                     model=model, messages=messages, stream=False,
-                    reasoning_effort="high",
-                    extra_body={"thinking": {"type": "enabled"}},
                 )
                 s = (resp.choices[0].message.content or "").strip()
                 print(f"[DeepSeek] 相关性判定输出：{s[:200]}…", file=sys.stderr)
@@ -130,6 +131,26 @@ def _judge_one(client, model: str, caption: str, page_text: str,
     except Exception:
         pass
     return True, "判定异常（默认保留）"
+
+
+def _load_page_texts(path: Path) -> dict:
+    """把 texts.md 一次解析为 {页号: 正文}（v3.0.1：避免每条目重复读文件）。"""
+    out = {}
+    if not path or not path.exists():
+        return out
+    cur, buf = None, []
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^##\s*第\s*(\d+)\s*页\s*$", ln.strip())
+        if m:
+            if cur is not None:
+                out[cur] = "\n".join(x.strip() for x in buf if x.strip())
+            cur = int(m.group(1))
+            buf = []
+        elif cur is not None:
+            buf.append(ln)
+    if cur is not None:
+        out[cur] = "\n".join(x.strip() for x in buf if x.strip())
+    return out
 
 
 def _rewrite_captions(path: Path, entries: list, n_del: int) -> None:
@@ -173,7 +194,11 @@ def related_filter(captions_path: Path, texts_path: Path,
                    base_url: str = DEFAULT_BASE_URL,
                    api_key_env: str = DEFAULT_KEY_ENV,
                    keep_all: bool = False, on_progress=None) -> dict:
-    """执行相关性过滤。返回统计 dict。"""
+    """执行相关性过滤。返回统计 dict。
+
+    v3.0.1：① 并发判定（ThreadPoolExecutor，去 thinking 普通生成）；
+    ② 页面正文为空 → 保守保留（不调模型，避免误删）；
+    ③ texts.md 预加载为 {页: 正文}（不再每条目重读文件）。"""
     entries = parse_caption_entries(captions_path)
     n_total = len(entries)
     if n_total == 0:
@@ -193,39 +218,68 @@ def related_filter(captions_path: Path, texts_path: Path,
         from openai import OpenAI
         client = OpenAI(api_key=api_key, base_url=base_url)
 
-    for i, (img_id, file, text) in enumerate(entries):
-        if on_progress is not None:
-            try:
-                on_progress(i + 1, n_total, {"kind": "related"})
-            except Exception:
-                pass
+    # 预加载正文（v3.0.1）
+    page_texts = _load_page_texts(texts_path)
+
+    # 并发判定：返回 (img_id, file, text, keep, reason)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _work(item):
+        img_id, file, text = item
+        pg = _page_of(file)
+        page_text = page_texts.get(pg, "") if pg else ""
         if client is None:
-            keep, reason = True, "跳过（未配置模型/keep-all）"
-        else:
-            pg = _page_of(file)
-            page_text = _md_page_text(texts_path, pg) if pg else ""
-            keep, reason = _judge_one(client, model, text, page_text)
-        if keep:
-            kept.append((img_id, file, text))
-        else:
-            dropped[file] = {"page": _page_of(file), "reason": reason,
-                             "caption": text[:120]}
-            reasons[reason or "其他"] = reasons.get(reason or "其他", 0) + 1
-            # 删除 images/ 与 by_page/ 下的对应文件（失败不再静默，计入告警）
-            for d in (images_dir, by_page_dir):
-                if d and d.is_dir():
-                    f = d / file
-                    try:
-                        if f.is_file():
-                            f.unlink()
-                    except OSError as e:
-                        delete_failed += 1
-                        print(f"[警告] 删除失败（可能被安全删除机制拦截）："
-                              f"{f}（{e}）", file=sys.stderr)
-            print(f"[删除] {img_id} `{file}` 与正文无关（{reason}）",
+            return (img_id, file, text, True, "跳过（未配置模型/keep-all）")
+        if not page_text.strip():
+            # 正文为空：无法判断相关性 → 保守保留（不调模型，避免误删）
+            print(f"[保留] {img_id} `{file}` 页面正文为空，无法判断，保守保留",
                   file=sys.stderr)
-        if i % 10 == 0 and client is not None:
-            time.sleep(0.2)
+            return (img_id, file, text, True, "页面正文为空，无法判断，保守保留")
+        keep, reason = _judge_one(client, model, text, page_text)
+        return (img_id, file, text, keep, reason)
+
+    done = 0
+    if client is not None:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = [ex.submit(_work, e) for e in entries]
+            for fut in as_completed(futs):
+                done += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(done, n_total, {"kind": "related"})
+                    except Exception:
+                        pass
+                img_id, file, text, keep, reason = fut.result()
+                if keep:
+                    kept.append((img_id, file, text))
+                else:
+                    dropped[file] = {"page": _page_of(file), "reason": reason,
+                                     "caption": text[:120]}
+                    reasons[reason or "其他"] = \
+                        reasons.get(reason or "其他", 0) + 1
+                    # 删除 images/ 与 by_page/ 下的对应文件（失败告警）
+                    for d in (images_dir, by_page_dir):
+                        if d and d.is_dir():
+                            f = d / file
+                            try:
+                                if f.is_file():
+                                    f.unlink()
+                            except OSError as e:
+                                delete_failed += 1
+                                print(f"[警告] 删除失败（可能被安全删除机制拦截）："
+                                      f"{f}（{e}）", file=sys.stderr)
+                    print(f"[删除] {img_id} `{file}` 与正文无关（{reason}）",
+                          file=sys.stderr)
+    else:
+        # 无模型：全部保留（keep-all 或未配置 Key）
+        for img_id, file, text in entries:
+            done += 1
+            if on_progress is not None:
+                try:
+                    on_progress(done, n_total, {"kind": "related"})
+                except Exception:
+                    pass
+            kept.append((img_id, file, text))
 
     # 重写 captions.md（保留相关条目）
     _rewrite_captions(captions_path, kept, len(dropped))
