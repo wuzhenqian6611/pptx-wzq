@@ -319,12 +319,17 @@ def _gen_textbook(client, full_prompt: str, subject: str,
     last_err = None
     for attempt in range(retries + 1):
         try:
+            print(f"[DeepSeek] 教材文案输入（第 {attempt + 1} 次）："
+                  f"{full_prompt[:300]}…", file=sys.stderr)
             resp = client.chat.completions.create(
                 model=model, messages=messages, stream=False,
                 reasoning_effort="high",
                 extra_body={"thinking": {"type": "enabled"}},
             )
-            return (resp.choices[0].message.content or "").strip()
+            out = (resp.choices[0].message.content or "").strip()
+            print(f"[DeepSeek] 教材文案输出（前 300 字）：{out[:300]}…",
+                  file=sys.stderr)
+            return out
         except Exception as e:
             last_err = e
             if attempt < retries:

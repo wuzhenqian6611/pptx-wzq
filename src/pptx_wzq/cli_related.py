@@ -105,12 +105,15 @@ def _judge_one(client, model: str, caption: str, page_text: str,
         last_err = None
         for attempt in range(retries + 1):
             try:
+                print(f"[DeepSeek] 相关性判定输入（第 {attempt + 1} 次）："
+                      f"{caption[:200]}…", file=sys.stderr)
                 resp = client.chat.completions.create(
                     model=model, messages=messages, stream=False,
                     reasoning_effort="high",
                     extra_body={"thinking": {"type": "enabled"}},
                 )
                 s = (resp.choices[0].message.content or "").strip()
+                print(f"[DeepSeek] 相关性判定输出：{s[:200]}…", file=sys.stderr)
                 m = re.search(r"\{.*\}", s, re.S)
                 if m:
                     data = json.loads(m.group(0))

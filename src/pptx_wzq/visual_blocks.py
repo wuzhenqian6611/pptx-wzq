@@ -758,17 +758,23 @@ def describe_block(client, model: str, block: VisualBlock,
             mime = "image/png" if ext == "png" else f"image/{ext}"
             content.insert(0, {"type": "image_url",
                                "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        print(f"[qwen] 块视觉解读输入 → {block.block_id}"
+              f"（图：{image_path.name if image_path else '无'}）："
+              f"{content[0].get('text', '')[:200]}…" if content else
+              f"[qwen] 块视觉解读输入 → {block.block_id}（无图）",
+              file=sys.stderr)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": DESCRIBE_SYSTEM},
                       {"role": "user", "content": content}],
             stream=False,
-            max_tokens=600,          # 限制输出长度：thinking 模式长思考会拖慢响应
-            timeout=60,              # 单次调用超时保护，失败回退规则模板
-            reasoning_effort="high",
-            extra_body={"thinking": {"type": "enabled"}},
+            max_tokens=600,
+            timeout=60,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
+        out = resp.choices[0].message.content or ""
+        print(f"[qwen] 块视觉解读输出 ← {block.block_id}：{out[:260]}…",
+              file=sys.stderr)
+        data = _safe_json(out)
         btype = data.get("block_type", "")
         if btype not in BLOCK_TYPE_ALL:
             btype = _guess_block_type(
@@ -835,7 +841,7 @@ SEMANTIC_SYSTEM = (
 
 def enrich_semantics(client, model: str, slides: list, page_texts: dict,
                      page_formulas: dict,
-                     on_progress=None) -> int:
+                     on_progress=None, max_workers: int = 8) -> int:
     """用 DeepSeek（文本模型）为每个可视逻辑块的 semantic_description 生成
     真实语义内容（expression_goal / expression_role / expression_features /
     vlm_caption / teaching_use），覆盖规则回退模板。
@@ -848,85 +854,106 @@ def enrich_semantics(client, model: str, slides: list, page_texts: dict,
     slides：_assemble_slides 后的结构 [{slide_info, textual_content,
     visual_blocks: [dict], ...}]——直接就地更新块的 semantic_description。
     无 client / 调用失败 / 模型返回非法时保留原内容。返回增强块数。
+
+    v3.0 提速：① 去掉 reasoning_effort=high/thinking（普通生成，5-10 倍）；
+    ② ThreadPoolExecutor 并发调用（再 3-5 倍）；③ 打印每块输入输出摘要
+    （[DeepSeek] 输入/输出）让用户看到实时运行过程。
     """
     if client is None or not model:
         return 0
-    enriched = 0
-    total = sum(len(s.get("visual_blocks") or []) for s in slides)
-    done = 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    tasks = []
     for s in slides:
         page = s.get("slide_info", {}).get("slide_index") or s.get("page", 0)
         raw = (s.get("textual_content") or {}).get("raw_text", "") or \
             page_texts.get(page, "")
         fm = page_formulas.get(page, "")
         for blk in s.get("visual_blocks") or []:
-            done += 1
-            if on_progress is not None:
-                try:
-                    on_progress(done, total, {"kind": "semantics"})
-                except Exception:
-                    pass
-            try:
-                st = blk.get("internal_structure") or {}
-                node_texts = [n.get("text", "") for n in st.get("nodes", [])][:8]
-                node_texts = [t for t in node_texts if t.strip()]
-                bb = blk.get("bbox") or {}
-                old_sd = blk.get("semantic_description") or {}
-                prompt = (
-                    f"【块类型】{blk.get('block_type', '')}\n"
-                    f"【节点文本】{' / '.join(node_texts[:8]) or '（无文本标签）'}\n"
-                    f"【占据页面比例】块 {bb.get('w', 0):.0f}x{bb.get('h', 0):.0f}"
-                    f" px（约 {bb.get('w', 0)*bb.get('h', 0)/691200*100:.0f}% 页）\n"
-                    f"【该页文字】\n{raw[:1200]}\n"
-                    + (f"【该页公式】\n{fm[:500]}\n" if fm else "")
-                    + (f"【已有描述】\n{json.dumps(old_sd, ensure_ascii=False)[:400]}\n"
-                       if old_sd else "")
-                    + "请输出该块的语义描述 JSON。"
-                )
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "system", "content": SEMANTIC_SYSTEM},
-                              {"role": "user", "content": prompt}],
-                    stream=False,
-                    max_tokens=600,
-                    timeout=60,
-                    reasoning_effort="high",
-                    extra_body={"thinking": {"type": "enabled"}},
-                )
-                data = _safe_json(resp.choices[0].message.content or "")
-                if not data:
-                    continue
-                goal = str(data.get("expression_goal", "") or "").strip()
-                role = str(data.get("expression_role", "") or "").strip()
-                feats = data.get("expression_features") or []
-                cap = str(data.get("vlm_caption", "") or "").strip()
-                use = str(data.get("teaching_use", "") or "").strip()
-                if not (goal or role or cap):
-                    continue
-                blk["semantic_description"] = {
-                    # v2.0 merge：优先保留 caption 步骤的 block_type/解读
-                    "block_type": old_sd.get("block_type")
-                                  or blk.get("block_type", ""),
-                    "expression_goal": goal or old_sd.get("expression_goal", ""),
-                    "expression_role": role or old_sd.get("expression_role", ""),
-                    "expression_features": [
-                        str(f)[:30] for f in feats if str(f).strip()][:5]
-                        or old_sd.get("expression_features", ["可视化"]),
-                    "vlm_caption": cap or old_sd.get("vlm_caption") or (
-                        old_sd.get("semantic_description")
-                        if isinstance(old_sd.get("semantic_description"), str)
-                        else ""),
-                    "teaching_use": use or old_sd.get("teaching_use",
-                                                      "教学辅助图示"),
-                    "formula_latex": old_sd.get("formula_latex", ""),
-                    "caption_source": old_sd.get("caption_source", ""),
-                }
-                enriched += 1
-            except Exception as e:
-                print(f"[语义] 块 {blk.get('block_id')} 增强失败：{e}",
-                      file=sys.stderr)
-            if done % 10 == 0:
-                time.sleep(0.2)
+            st = blk.get("internal_structure") or {}
+            node_texts = [n.get("text", "") for n in st.get("nodes", [])][:8]
+            node_texts = [t for t in node_texts if t.strip()]
+            bb = blk.get("bbox") or {}
+            old_sd = blk.get("semantic_description") or {}
+            prompt = (
+                f"【块类型】{blk.get('block_type', '')}\n"
+                f"【节点文本】{' / '.join(node_texts[:8]) or '（无文本标签）'}\n"
+                f"【占据页面比例】块 {bb.get('w', 0):.0f}x{bb.get('h', 0):.0f}"
+                f" px（约 {bb.get('w', 0)*bb.get('h', 0)/691200*100:.0f}% 页）\n"
+                f"【该页文字】\n{raw[:1200]}\n"
+                + (f"【该页公式】\n{fm[:500]}\n" if fm else "")
+                + (f"【已有描述】\n{json.dumps(old_sd, ensure_ascii=False)[:400]}\n"
+                   if old_sd else "")
+                + "请输出该块的语义描述 JSON。"
+            )
+            tasks.append((s, blk, prompt))
+    total = len(tasks)
+    enriched = 0
+    done = 0
+
+    def _work(item):
+        _s, blk, prompt = item
+        try:
+            print(f"[DeepSeek] 语义增强输入 → {blk.get('block_id')}"
+                  f"（{blk.get('block_type', '')}）：{prompt[:260]}…",
+                  file=sys.stderr)
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": SEMANTIC_SYSTEM},
+                          {"role": "user", "content": prompt}],
+                stream=False,
+                max_tokens=600,
+                timeout=60,
+            )
+            out = resp.choices[0].message.content or ""
+            print(f"[DeepSeek] 语义增强输出 ← {blk.get('block_id')}："
+                  f"{out[:260]}…", file=sys.stderr)
+            data = _safe_json(out)
+            if not data:
+                return False
+            goal = str(data.get("expression_goal", "") or "").strip()
+            role = str(data.get("expression_role", "") or "").strip()
+            feats = data.get("expression_features") or []
+            cap = str(data.get("vlm_caption", "") or "").strip()
+            use = str(data.get("teaching_use", "") or "").strip()
+            if not (goal or role or cap):
+                return False
+            old_sd = blk.get("semantic_description") or {}
+            blk["semantic_description"] = {
+                # v2.0 merge：优先保留 caption 步骤的 block_type/解读
+                "block_type": old_sd.get("block_type")
+                              or blk.get("block_type", ""),
+                "expression_goal": goal or old_sd.get("expression_goal", ""),
+                "expression_role": role or old_sd.get("expression_role", ""),
+                "expression_features": [
+                    str(f)[:30] for f in feats if str(f).strip()][:5]
+                    or old_sd.get("expression_features", ["可视化"]),
+                "vlm_caption": cap or old_sd.get("vlm_caption") or (
+                    old_sd.get("semantic_description")
+                    if isinstance(old_sd.get("semantic_description"), str)
+                    else ""),
+                "teaching_use": use or old_sd.get("teaching_use",
+                                                  "教学辅助图示"),
+                "formula_latex": old_sd.get("formula_latex", ""),
+                "caption_source": old_sd.get("caption_source", ""),
+            }
+            return True
+        except Exception as e:
+            print(f"[语义] 块 {blk.get('block_id')} 增强失败：{e}",
+                  file=sys.stderr)
+            return False
+
+    if total:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = [ex.submit(_work, t) for t in tasks]
+            for fut in as_completed(futs):
+                done += 1
+                if fut.result():
+                    enriched += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(done, total, {"kind": "semantics"})
+                    except Exception:
+                        pass
     return enriched
 
 
@@ -948,7 +975,7 @@ RELATION_ENRICH_SYSTEM = (
 
 def enrich_relations(client, model: str, slides: list, page_texts: dict,
                      page_formulas: dict | None = None,
-                     on_progress=None) -> int:
+                     on_progress=None, max_workers: int = 8) -> int:
     """用 DeepSeek 生成每页 cross_modal_relations 的真实图文关联
     （text_anchor / relation_type / semantic_link），覆盖规则回退模板。
 
@@ -959,12 +986,13 @@ def enrich_relations(client, model: str, slides: list, page_texts: dict,
 
     slides：_assemble_slides 后的结构——就地更新 s["cross_modal_relations"]。
     无 client / 调用失败 / 返回非法时保留原值。返回增强关系数。
+
+    v3.0 提速：同 enrich_semantics——普通生成 + 并发 + 输入输出打印。
     """
     if client is None or not model:
         return 0
-    enriched = 0
-    total = sum(len(s.get("cross_modal_relations") or []) for s in slides)
-    done = 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    tasks = []
     for s in slides:
         page = s.get("slide_info", {}).get("slide_index") or 0
         raw = (s.get("textual_content") or {}).get("raw_text", "") or \
@@ -973,57 +1001,73 @@ def enrich_relations(client, model: str, slides: list, page_texts: dict,
         blk_by_id = {blk.get("block_id"): blk
                      for blk in (s.get("visual_blocks") or [])}
         for rel in s.get("cross_modal_relations") or []:
-            done += 1
-            if on_progress is not None:
-                try:
-                    on_progress(done, total, {"kind": "relations"})
-                except Exception:
-                    pass
-            try:
-                blk = blk_by_id.get(rel.get("target_block_id") or "")
-                if not blk:
-                    continue
-                sd = blk.get("semantic_description") or {}
-                prompt = (
-                    f"【页面正文】\n{raw[:1500]}\n"
-                    + (f"【该页公式】\n{fm[:300]}\n" if fm else "")
-                    + f"【可视逻辑块】\n"
-                      f"类型：{blk.get('block_type', '')}\n"
-                      f"表达目标：{sd.get('expression_goal', '')}\n"
-                      f"表达作用：{sd.get('expression_role', '')}\n"
-                      f"教学用途：{sd.get('teaching_use', '')}\n"
-                      "请输出该块与页面文字的关系 JSON。"
-                )
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": RELATION_ENRICH_SYSTEM},
-                        {"role": "user", "content": prompt}],
-                    stream=False,
-                    max_tokens=300,
-                    timeout=60,
-                    reasoning_effort="high",
-                    extra_body={"thinking": {"type": "enabled"}},
-                )
-                data = _safe_json(resp.choices[0].message.content or "")
-                if not data:
-                    continue
-                anchor = str(data.get("text_anchor", "") or "").strip()
-                link = str(data.get("semantic_link", "") or "").strip()
-                if not (anchor or link):
-                    continue
-                rtype = str(data.get("relation_type", "elaboration")).strip()
-                rel["text_anchor"] = anchor[:60]
-                rel["relation_type"] = rtype if rtype in (
-                    "elaboration", "title_caption", "contrast",
-                    "example", "data_presentation") else "elaboration"
-                rel["semantic_link"] = link[:120]
-                enriched += 1
-            except Exception as e:
-                print(f"[关系] {rel.get('relation_id')} 增强失败：{e}",
-                      file=sys.stderr)
-            if done % 10 == 0:
-                time.sleep(0.2)
+            blk = blk_by_id.get(rel.get("target_block_id") or "")
+            if not blk:
+                continue
+            sd = blk.get("semantic_description") or {}
+            prompt = (
+                f"【页面正文】\n{raw[:1500]}\n"
+                + (f"【该页公式】\n{fm[:300]}\n" if fm else "")
+                + f"【可视逻辑块】\n"
+                  f"类型：{blk.get('block_type', '')}\n"
+                  f"表达目标：{sd.get('expression_goal', '')}\n"
+                  f"表达作用：{sd.get('expression_role', '')}\n"
+                  f"教学用途：{sd.get('teaching_use', '')}\n"
+                  "请输出该块与页面文字的关系 JSON。"
+            )
+            tasks.append((s, rel, prompt))
+    total = len(tasks)
+    enriched = 0
+    done = 0
+
+    def _work(item):
+        _s, rel, prompt = item
+        try:
+            print(f"[DeepSeek] 关系增强输入 → {rel.get('relation_id', rel.get('target_block_id'))}："
+                  f"{prompt[:260]}…", file=sys.stderr)
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": RELATION_ENRICH_SYSTEM},
+                    {"role": "user", "content": prompt}],
+                stream=False,
+                max_tokens=300,
+                timeout=60,
+            )
+            out = resp.choices[0].message.content or ""
+            print(f"[DeepSeek] 关系增强输出 ← {rel.get('relation_id', rel.get('target_block_id'))}："
+                  f"{out[:260]}…", file=sys.stderr)
+            data = _safe_json(out)
+            if not data:
+                return False
+            anchor = str(data.get("text_anchor", "") or "").strip()
+            link = str(data.get("semantic_link", "") or "").strip()
+            if not (anchor or link):
+                return False
+            rtype = str(data.get("relation_type", "elaboration")).strip()
+            rel["text_anchor"] = anchor[:60]
+            rel["relation_type"] = rtype if rtype in (
+                "elaboration", "title_caption", "contrast",
+                "example", "data_presentation") else "elaboration"
+            rel["semantic_link"] = link[:120]
+            return True
+        except Exception as e:
+            print(f"[关系] {rel.get('relation_id')} 增强失败：{e}",
+                  file=sys.stderr)
+            return False
+
+    if total:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = [ex.submit(_work, t) for t in tasks]
+            for fut in as_completed(futs):
+                done += 1
+                if fut.result():
+                    enriched += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(done, total, {"kind": "relations"})
+                    except Exception:
+                        pass
     return enriched
 
 
@@ -1037,22 +1081,25 @@ def build_cross_modal_relations(blocks: list[VisualBlock],
     if client is not None and model:
         for i, blk in enumerate(blocks, start=1):
             try:
+                _prompt = (f"【页面正文】\n{page_text[:1500]}\n\n"
+                           f"【可视逻辑块】\n"
+                           f"类型：{blk.block_type}；"
+                           f"目标：{(blk.semantic_description or {}).get('expression_goal', '')}"
+                           f"；描述：{(blk.semantic_description or {}).get('vlm_caption', '')[:200]}")
+                print(f"[qwen] 图文关系输入 → {blk.block_id}：{_prompt[:200]}…",
+                      file=sys.stderr)
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "system", "content": RELATION_SYSTEM},
-                              {"role": "user", "content":
-                               f"【页面正文】\n{page_text[:1500]}\n\n"
-                               f"【可视逻辑块】\n"
-                               f"类型：{blk.block_type}；"
-                               f"目标：{(blk.semantic_description or {}).get('expression_goal', '')}"
-                               f"；描述：{(blk.semantic_description or {}).get('vlm_caption', '')[:200]}"}],
+                              {"role": "user", "content": _prompt}],
                     stream=False,
                     max_tokens=300,
                     timeout=60,
-                    reasoning_effort="high",
-                    extra_body={"thinking": {"type": "enabled"}},
                 )
-                data = _safe_json(resp.choices[0].message.content or "")
+                out = resp.choices[0].message.content or ""
+                print(f"[qwen] 图文关系输出 ← {blk.block_id}：{out[:200]}…",
+                      file=sys.stderr)
+                data = _safe_json(out)
                 anchor = str(data.get("text_anchor", "") or "")[:60]
                 relations.append({
                     "relation_id": f"rel_{page_no:02d}_{i:02d}",

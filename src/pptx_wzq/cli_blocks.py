@@ -313,11 +313,15 @@ def _ds_read_xml(client, model: str, xml_path: Path,
             _p = prompt if attempt < 3 else (
                 prompt + "\n\n（再次请求：请务必完整输出唯一一个 JSON 对象，"
                          "不要输出其他内容）")
+            print(f"[DeepSeek] XML 解读输入 → {xml_path.name}（尝试 {attempt}）："
+                  f"{_p[:260]}…", file=sys.stderr)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": _p}],
                 temperature=0.3, timeout=60, max_tokens=800)
             last = resp.choices[0].message.content or ""
+            print(f"[DeepSeek] XML 解读输出 ← {xml_path.name}：{last[:260]}…",
+                  file=sys.stderr)
             if last.strip():
                 break
         except Exception as e:
@@ -346,6 +350,9 @@ def _vlm_read_img(client, model: str, img_path: Path,
         "（像素图）。输出 JSON：{\"block_type\": \"...\", "
         "\"semantic_description\": \"...\", \"formula_latex\": \"...\"}")
     try:
+        print(f"[qwen] 像素图解读输入 → {img_path.name}"
+              f"（{img_path.stat().st_size // 1024}KB）：{prompt[:260]}…",
+              file=sys.stderr)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": [
@@ -353,7 +360,10 @@ def _vlm_read_img(client, model: str, img_path: Path,
                 {"type": "image_url",
                  "image_url": {"url": f"data:image/png;base64,{b64}"}}]}],
             temperature=0.3, timeout=60, max_tokens=800)
-        d = _parse_desc_json(resp.choices[0].message.content or "")
+        out = resp.choices[0].message.content or ""
+        print(f"[qwen] 像素图解读输出 ← {img_path.name}：{out[:260]}…",
+              file=sys.stderr)
+        d = _parse_desc_json(out)
         if "formula_latex" not in d:
             d["formula_latex"] = ""
         d["caption_source"] = "qwen_vlm"
