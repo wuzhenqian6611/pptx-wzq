@@ -1155,10 +1155,31 @@ try:
             pres.ExportAsFixedFormat(sys.argv[2], 2, 1, False, 1, 1, True,
                                      None, 1, "", False, False, True,
                                      False, False)
-        except Exception:
-            # 简化参数回退（WPS 等兼容实现不支持 13 参签名）：
-            # (Path, FixedFormatType=2=PDF, Intent=1=Screen)
-            pres.ExportAsFixedFormat(sys.argv[2], 2, 1)
+        except Exception as e1:
+            import traceback as _tb
+            _err1 = _tb.format_exc()
+            try:
+                # 简化参数回退（WPS 等兼容实现不支持 13 参签名）：
+                # (Path, FixedFormatType=2=PDF, Intent=1=Screen)
+                pres.ExportAsFixedFormat(sys.argv[2], 2, 1)
+            except Exception as e2:
+                # v3.1.4：两次导出都失败——输出可读原因（E_FAIL=0x80004005
+                # 常见于：目标 PDF 被占用、缓存目录不可写、源文件正被
+                # WPS/PowerPoint 编辑）
+                _err2 = _tb.format_exc()
+                print("[EXPORT_FAIL] PDF 导出失败（13 参 + 简化参数均失败）",
+                      file=sys.stderr)
+                print(f"  完整参数错误：{e1}", file=sys.stderr)
+                print(f"  简化参数错误：{e2}", file=sys.stderr)
+                if "0x80004005" in _err1 or "-2147467259" in _err1:
+                    print("  可能原因：① 缓存目录内 _ppt_render.pdf 被占用"
+                          "（WPS/PDF 查看器/残留演示进程）；② 缓存目录不可写；"
+                          "③ 源 PPT 正被 WPS/PowerPoint 打开编辑。",
+                          file=sys.stderr)
+                    print("  建议：关闭占用该 PDF/PPT 的程序后重试；或删除 "
+                          ".render_cache 下对应课件目录。", file=sys.stderr)
+                print(_err2[-500:], file=sys.stderr)
+                raise
     finally:
         pres.Close()
 finally:
@@ -1223,8 +1244,13 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
             if pdf_path.is_file():
                 try:
                     pdf_path.unlink()
-                except OSError:
-                    pass
+                except OSError as _e:
+                    # v3.1.4：旧 PDF 被占用（WPS/PDF 查看器/残留演示进程锁着）时
+                    # 若继续导出必然 E_FAIL——提前给出可读提示，不静默
+                    print(f"[渲染] 警告：旧渲染 PDF 被占用无法删除（{_e}）；"
+                          f"若后续导出失败，请关闭占用它的程序（WPS/PDF "
+                          f"查看器/残留 PowerPoint 进程）后重试",
+                          file=sys.stderr)
             # COM 渲染放独立子进程：超时杀进程树（python + 演示应用），
             # 避免 win32com 永久阻塞主流程
             proc = subprocess.Popen(
