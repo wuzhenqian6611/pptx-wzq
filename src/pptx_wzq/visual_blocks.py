@@ -1163,6 +1163,9 @@ def extract_blocks(pptx_path: str, out_dir: str,
     ao_map = {o.obj_id: o for o in atomic}
     page_texts = page_texts or {}
     cfg = {**CLUSTER_CONFIG, **(config or {})}
+    # v3.1.1：caption 步骤已解读的块集合 {page: {block_id}}——VLM 视觉兜底
+    # 跳过这些块（prev-blocks 合并时会用 caption 解读覆盖，读了也白读）
+    interpreted = cfg.get("interpreted_blocks") or {}
     # 硬编码修复：用真实页面尺寸（sldSz）覆盖 960×720 参考值——
     # 16:9 页面（1280×720）若按 960×720 算，越界判定会把中心 x>960 的
     # 页面右侧有效对象误剔，且横幅/大图/碎片等比例类阈值偏差 33%
@@ -1300,12 +1303,18 @@ def extract_blocks(pptx_path: str, out_dir: str,
         if len(blocks) > cfg["max_blocks_per_slide"]:
             blocks = blocks[:cfg["max_blocks_per_slide"]]
 
-        # VLM 增强（可选）
+        # VLM 增强（可选）——v3.1.1：只对 caption 未解读的块读渲染图兜底。
+        # 已解读块（prev-blocks 合并会覆盖）跳过，避免"算完即被覆盖"的白跑；
+        # 图路径改 images/slide_{page:02d}_{block_id}.png（blocks 步骤渲染图，
+        # 原 by_page/blk_NN.png 不存在导致 qwen 一直是纯文本调用）
         if client is not None:
             page_text = page_texts.get(page_no, "")
+            interpreted_this = interpreted.get(page_no) or set()
             for blk in blocks:
-                # 渲染块 PNG（仅复合块或需要时）
-                img_path = out_dir / "by_page" / f"{blk.block_id}.png"
+                if blk.block_id in interpreted_this:
+                    continue   # caption 已解读 → 跳过（合并时保留 caption 解读）
+                img_path = out_dir / "images" / \
+                    f"slide_{page_no:02d}_{blk.block_id}.png"
                 desc = describe_block(client, model, blk, page_text,
                                       img_path if img_path.is_file() else None)
                 if desc.get("block_type"):

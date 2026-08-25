@@ -726,6 +726,25 @@ def _main(argv=None) -> int:
                 client = None
 
     t0 = time.time()
+    # v3.1.1：提前读 prev-blocks 的"已解读块"集合（caption_source 非空），
+    # 传给 extract_blocks 跳过 qwen 视觉兜底——否则 qwen 读图结果会被下方
+    # prev-blocks 合并（caption 解读优先）覆盖，白跑 Token
+    prev_interpreted = {}
+    if getattr(args, "prev_blocks", None) and Path(args.prev_blocks).is_file():
+        try:
+            _pv = json.loads(Path(args.prev_blocks).read_text(
+                encoding="utf-8"))
+            for _s in _pv.get("slides") or []:
+                _pg = (_s.get("slide_info") or {}).get(
+                    "slide_index", _s.get("page", 0))
+                for _b in _s.get("visual_blocks") or []:
+                    if (_b.get("semantic_description") or {}).get(
+                            "caption_source"):
+                        prev_interpreted.setdefault(_pg, set()).add(
+                            _b.get("block_id"))
+        except Exception as _e:
+            print(f"[警告] prev-blocks 已解读集合读取失败：{_e}",
+                  file=sys.stderr)
     # v2.0：--caption-sources 时块结构阶段不跑 VLM（解读走 sources/ 路由）
     blk_client = None if args.caption_sources else client
     slides = VB.extract_blocks(
@@ -736,6 +755,8 @@ def _main(argv=None) -> int:
         client=blk_client,
         model=args.model,
         on_progress=None,
+        config={"interpreted_blocks": prev_interpreted}
+        if prev_interpreted else None,
     )
     # 块渲染 PNG（放 images/ 统一目录）
     stem = ""
