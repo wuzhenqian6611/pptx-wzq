@@ -394,7 +394,9 @@ def _exec_step(step: str, args, work: Path, stem: str,
                action: str) -> None:
     """执行单个步骤（text/formula/blocks/related/author/blocks_json）。
     action: run | resume（resume 透传给子命令的续跑参数）。"""
-    pptx = Path(args.pptx)
+    # v3.0.2：resolve 成绝对路径——渲染子进程 CWD 继承主进程，若用户以相对
+    # 路径启动（尤其在系统目录运行），PowerPoint Open 相对路径会 0x80070002
+    pptx = Path(args.pptx).resolve()
     total = len(STEPS)
     idx = STEPS.index(step) + 1
     if step == "text":
@@ -791,7 +793,7 @@ def _main(argv=None) -> int:
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
 
-    pptx = Path(args.pptx)
+    pptx = Path(args.pptx).resolve()   # v3.0.2：绝对路径，避免子进程 CWD 继承问题
     if not pptx.is_file():
         print(f"[错误] PPT 文件不存在：{pptx}", file=sys.stderr)
         return 2

@@ -1190,9 +1190,12 @@ def _render_pptx_pages_com(pptx_path: str, cache_dir: Path,
         try:
             _, err_b = proc.communicate(timeout=timeout)
             if proc.returncode != 0:
-                err = (err_b or b"").decode("utf-8", "ignore")[-200:]
-                print(f"[渲染] PowerPoint COM 子进程失败 rc={proc.returncode}：{err}",
+                # v3.0.2：完整显示子进程 stderr（含 OPEN_FAIL 可读提示），
+                # 不再只截尾部 200 字符（会把原因提示截掉只剩 traceback）
+                err = (err_b or b"").decode("utf-8", "ignore").strip()
+                print(f"[渲染] PowerPoint COM 子进程失败 rc={proc.returncode}：",
                       file=sys.stderr)
+                print(f"        {err}", file=sys.stderr)
                 return None
         except subprocess.TimeoutExpired:
             # 杀进程树（python + PowerPoint）：COM 挂起时 PowerPoint 残留
