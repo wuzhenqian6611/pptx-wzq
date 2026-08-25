@@ -1,6 +1,6 @@
 # pptx-wzq 技术分析报告
 
-> PPT 多模态教学知识库自动化构建系统 · 版本 2.4.0 · 2026-08-24
+> PPT 多模态教学知识库自动化构建系统 · 版本 3.1.2 · 2026-08-25
 
 ## 1. 系统定位与核心能力
 
@@ -8,7 +8,9 @@ pptx-wzq 面向高校教学场景，把「讲稿 PPT」自动转成可检索、�
 
 - **图块（可视逻辑块）优先**：以「组合即图块」为第一原则，把作者用 PPT 组合工具绘制的逻辑图/示意图整体保留，而非拆散成碎片。
 - **源语言级解构**：grpSp 组合保留**原生 XML 段**（p:/a:/r: 前缀），Visio/vsdx 剥离原生文件，公式转 LaTeX——信息不降维。
-- **模型按块路由**：有 XML 的块 → DeepSeek 读 XML（公式转 LaTeX）；纯像素图块 → qwen VLM 兜底；DeepSeek 空响应自动降级。
+- **模型按块路由**：有 XML 的块 → DeepSeek 读 XML（公式转 LaTeX）；纯像素图块 → qwen VLM 兜底；DeepSeek 空响应自动降级；blocks_json 步骤 qwen 视觉兜底**按需触发**（仅 caption 未解读的块读渲染图）。
+- **OLE 预览图判定**：pic 前 300 字符内有 oleObj 即标记 `preview_of`（formula/visio/ole），预览快照不污染图块体系；组合内公式双通道进 formulas.md。
+- **运行过程全透明**：所有模型调用输入输出摘要实时打印（`[DeepSeek]`/`[qwen]` 前缀）。
 - **教材级文案**：整个 PPT 视为一部教材，DeepSeek 自主分章分节（一节可含多页），每页内容标注章节，500 字为限（不足扩写、超出直出整理）。
 - **生命周期自管**：全流程成功即清理过程文件；中断保留断点、二次运行自动接续。
 
@@ -18,24 +20,54 @@ pptx-wzq 面向高校教学场景，把「讲稿 PPT」自动转成可检索、�
 
 | 模块 | 职责 | Token |
 |---|---|---|
-| `extract_pptx_images.py` | OOXML 原子对象提取：图片/形状/组合(grpSp)/表格/公式(OLE·OMML)/图表；grpSp XML 段原生提取；srcRect 裁剪；PowerPoint COM 整页渲染 | 0（本地） |
+| `extract_pptx_images.py` | OOXML 原子对象提取：图片/形状/组合(grpSp)/表格/公式(OLE·OMML)/图表；grpSp XML 段原生提取；srcRect 裁剪；**OLE 预览图判定（_detect_preview_flags → preview_of）**；PowerPoint/WPS COM 整页渲染（ProgID 自动探测 + DispatchEx 独立实例 + 超时进程树清理） | 0（本地） |
 | `extract_texts.py` | 页面文本提取（in_group 标记、组内文字标注「图块内文本」）、表格 Markdown 化 | 0 |
-| `visual_blocks.py` | 单阶段确定性拆块（grpSp→group / visio / raster≥20% / 矢量）、块渲染、语义增强（DeepSeek）、跨模态关系 | DeepSeek |
-| `cli_blocks.py` | blocks/caption 命令：XML 段导出（sources/）、rldimg 资源复制、caption 路由（DeepSeek XML / qwen 兜底）、binding 导出、captions.md | DeepSeek+qwen |
+| `visual_blocks.py` | 单阶段确定性拆块（grpSp→group / visio / raster≥20% / 矢量）、块渲染、语义增强（DeepSeek **并发 8 + 普通生成**）、跨模态关系、**qwen 视觉兜底按需触发** | DeepSeek+qwen |
+| `cli_blocks.py` | blocks/caption/blocks_json 命令：XML 段导出（sources/）、rldimg 资源复制、caption 路由（DeepSeek XML / qwen 兜底）、**prev-blocks 已解读集合跳过（--skip-render 不碰 images/）**、binding 导出、captions.md | DeepSeek+qwen |
 | `cli_author.py` | 教材文案：整篇分章分节、每页标注章节、500 字为限（扩写/直出整理）、自动分批 | DeepSeek |
-| `cli_related.py` | 块相关性过滤（剔除 logo/作者/装饰块）+ 审计 json | DeepSeek |
-| `cli_paser.py` | 总编排器：8 环节流水线、断点续传（state.json）、产物归位、成功即清理 | — |
+| `cli_related.py` | 块相关性过滤（**并发判定 + 页面正文为空保守保留**）+ 审计 json | DeepSeek |
+| `cli_paser.py` | 总编排器：8 环节流水线、断点续传（state.json）、**pptx 强制 resolve 绝对路径**、产物归位、成功即清理 | — |
 | `cli_text/formula/img` 等 | 叶子命令（可单独调用）；img 已从流水线移除（并入 blocks 自举） | 0 |
 
 ### 2.2 命令体系（10 个 console_script）
 
 ```
 pptx-paser    总编排器（一条命令跑完 8 环节）
-pptx-blocks   图块提取 + 解构 + caption（--caption-sources 模式）
+pptx-blocks   图块提取 + 解构 + caption（--caption-sources 模式；--skip-render 不碰 images/）
 pptx-text     文本提取   pptx-formula  公式提取   pptx-caption  解读
 pptx-related  相关性过滤  pptx-author   教材文案   pptx-bind    图文绑定
 pptx-html     教材 HTML   pptx-deck     Deck 生成
 ```
+
+### 2.3 渲染通道（PowerPoint / WPS 自动探测）
+
+- **ProgID 探测**（`_detect_render_progid`）：注册表探测演示应用 COM——`PowerPoint.Application` → `Kwpp.Application`（WPS 演示），含 32/64 位视图；有 Office 用 Office，只有 WPS 用 WPS。
+- **独立实例**：`DispatchEx` 创建独立 COM 实例（PowerPoint 单实例应用，避免连接用户正在编辑的实例导致 Open 0x80070002）。
+- **参数回退**：`ExportAsFixedFormat` 完整 13 参失败自动降级简化 `(path, 2, 1)`（WPS 兼容）。
+- **路径安全**：`cli_paser` 强制 `Path(args.pptx).resolve()` 绝对路径（子进程 CWD 继承不会导致找不到文件）；渲染子进程失败完整显示 stderr。
+- **超时清理**：渲染子进程超时后 `_kill_proc_tree`（taskkill 进程树）清理，防残留实例。
+
+### 2.4 性能优化（3.0.0 / 3.0.1）
+
+| 步骤 | 优化前 | 优化后 | 提速 |
+|---|---|---|---|
+| blocks_json 语义增强/关系 | thinking 模式 × 串行（单次 5-20s × 块数） | 普通生成 + `ThreadPoolExecutor(8)` 并发 | **约 10 倍**（73 块 107s） |
+| related 相关性判定 | thinking × 串行（单条 75s） | 普通生成 + 并发 + 正文预加载 | **约 162 倍**（5523s → 34s） |
+
+所有 DeepSeek 结构化任务（语义描述/相关性二分类）均为浅层任务，无需深度思考模式——已全面移除 `reasoning_effort=high` / `thinking`。
+
+### 2.5 模型调用实时打印
+
+所有模型调用点打印输入/输出摘要（截断 260 字符）到 stderr：
+
+```
+[DeepSeek] 语义增强输入 → blk_01（group_diagram）：…
+[DeepSeek] 语义增强输出 ← blk_01：{"block_type": …
+[qwen] 块视觉解读输入 → blk_01（图：slide_03_blk_01.png）：…
+[qwen] 图文关系输出 ← blk_01：…
+```
+
+覆盖 DeepSeek（XML 解读/语义增强/关系增强/教材文案/相关性判定）与 qwen（块视觉解读/图文关系/像素图解读）全部调用点；并发时打印交错属正常现象。
 
 ## 3. 工作流程（8 环节）
 
@@ -47,11 +79,11 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成
 |---|---|---|---|
 | ① blocks | 图块提取 + 解构 | 本地 | 单阶段确定性拆块（grpSp→group / visio / 像素图≥20% / SVG-WMF）；XML 段每组合一个文件导出 sources/；rldimg 资源图落盘；PowerPoint COM 渲染块 PNG |
 | ② text | 文本提取 | 本地 | 排除页眉页脚/母版固定文本；组内文字标「[图块内文本]」；表格输出 Markdown |
-| ③ formula | 公式提取 | 本地 | 非组合公式 → LaTeX（OMML/MTEF/OCR 三级）；组合内公式排除（随 XML 段转 LaTeX） |
-| ④ caption | 图块 AI 解读 | DeepSeek+qwen | 按 sources/ 顺序：.xml → DeepSeek 读 XML（公式转 LaTeX）；.png → qwen 兜底 |
-| ⑤ related | 相关性过滤 | DeepSeek | 剔除 logo/作者/装饰块 → related_filter.json 审计 |
+| ③ formula | 公式提取 | 本地 | 非组合公式 → LaTeX（OMML/MTEF/OCR 三级）；**组合内公式也进 formulas.md**（双通道，`_fmt_entry` 标注「组合内公式」） |
+| ④ caption | 图块 AI 解读 | DeepSeek+qwen | 按 sources/ 顺序：.xml → DeepSeek 读 XML（公式转 LaTeX）；.png → qwen 兜底；调用输入输出实时打印 |
+| ⑤ related | 相关性过滤 | DeepSeek | 剔除 logo/作者/装饰块 → related_filter.json 审计；**ThreadPoolExecutor 并发判定 + 页面正文为空直接保留** |
 | ⑥ author | 教材文案 | DeepSeek | 整篇分章分节（一节可含多页），每页标注章节；≤500 字扩写、>500 字直出整理 |
-| ⑦ blocks_json | 组装 + 语义增强 | DeepSeek | visual_blocks.json（v2.0 schema）+ semantic_description + 跨模态关系 + binding 导出 |
+| ⑦ blocks_json | 组装 + 语义增强 | DeepSeek+qwen | visual_blocks.json（v2.0 schema）+ semantic_description + 跨模态关系 + binding 导出；**qwen 视觉兜底仅对 caption 未解读块**（读 images/ 渲染图），DeepSeek 增强并发 |
 | ⑧ 输出 | 归位 + 清理 | 本地 | 成功即删过程文件；中断保留断点自动接续 |
 
 ### 模型路由（规则 11/16）
@@ -192,6 +224,16 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成
 | 2.2.0 | textbook 规则改 500 字为限：不足扩写、超出直出整理（_tidy_direct） |
 | 2.3.0 | Author 整篇自主分章分节（一节可含多页），每页标注章节 |
 | 2.4.0 | 本报告（技术分析/流程/格式/预处理）随安装包分发 |
+| 2.5.0 | 使用手册+技术分析合并文档（html/pdf）、README 全量更新 |
+| 2.5.1 | 渲染静默降级修复：dependencies 补 pymupdf；渲染失败明确警告 |
+| 2.5.2 | images/ 不再被 caption/blocks_json 清空（--skip-render）；DispatchEx 独立实例（Open 0x80070002） |
+| 2.6.0 | OLE 预览图判定（preview_of）+ 组合内公式进 formulas.md（双通道） |
+| 3.0.0 | 语义增强提速（去 thinking + 并发 8，10 倍）+ 模型调用实时打印 |
+| 3.0.1 | related 并发提速（162 倍）+ 正文为空保守保留 |
+| 3.0.2 | 渲染 Open 失败根因：pptx 强制 resolve + 错误完整显示 |
+| 3.1.0 | WPS 渲染支持（ProgID 自动探测 + 简化参数回退） |
+| 3.1.1 | qwen 视觉兜底按需触发（仅 caption 未解读块）+ 图路径接通 images/ |
+| 3.1.2 | 文档体系更新：README/使用手册/技术分析同步 3.0.x~3.1.x 全部变更 |
 
 ---
 

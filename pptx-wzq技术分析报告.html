@@ -50,11 +50,11 @@
 <div class="wrap">
 
 <h1>pptx-wzq 技术分析报告</h1>
-<p class="lead">PPT 多模态教学知识库自动化构建系统 · 版本 2.4.0 · 2026-08-24</p>
+<p class="lead">PPT 多模态教学知识库自动化构建系统 · 版本 3.1.2 · 2026-08-25</p>
 
 <div class="cards">
   <div class="card"><h4>🎯 定位</h4><p>把任意 PPT 课件解构为「多模态教学知识库」：文本 / 公式 / 图块（可视逻辑块）三路抽取 + AI 解读 + 教材级文案，输出结构化 JSON / Markdown / 渲染图三件套。</p></div>
-  <div class="card"><h4>⚙️ 技术栈</h4><p>python-pptx 生态 + OOXML 原生解析（lxml/ElementTree）+ DeepSeek-V4-Flash（语义解读/文案）+ qwen3.7-plus（VLM 兜底）+ PowerPoint COM 渲染。</p></div>
+  <div class="card"><h4>⚙️ 技术栈</h4><p>python-pptx 生态 + OOXML 原生解析（lxml/ElementTree）+ DeepSeek-V4-Flash（语义解读/文案）+ qwen3.7-plus（VLM 兜底）+ PowerPoint/WPS COM 渲染（ProgID 自动探测）。</p></div>
   <div class="card"><h4>📦 交付物</h4><p>sources/（XML 段·矢量·资源图）+ images/（渲染图）+ visual_blocks.json + visualBlock_text_binding.json + textbook.md + captions.md。</p></div>
 </div>
 
@@ -72,7 +72,7 @@
 <h3>2.1 模块划分</h3>
 <table>
   <tr><th>模块</th><th>职责</th><th>Token</th></tr>
-  <tr><td><span class="mono">extract_pptx_images.py</span></td><td>OOXML 原子对象提取：图片/形状/组合(grpSp)/表格/公式(OLE·OMML)/图表；grpSp XML 段原生提取；srcRect 裁剪；PowerPoint COM 整页渲染</td><td>0（本地）</td></tr>
+  <tr><td><span class="mono">extract_pptx_images.py</span></td><td>OOXML 原子对象提取：图片/形状/组合(grpSp)/表格/公式(OLE·OMML)/图表；grpSp XML 段原生提取；srcRect 裁剪；OLE 预览图判定（preview_of）；PowerPoint/WPS COM 整页渲染（ProgID 自动探测）</td><td>0（本地）</td></tr>
   <tr><td><span class="mono">extract_texts.py</span></td><td>页面文本提取（in_group 标记、组内文字标注「图块内文本」）、表格 Markdown 化</td><td>0</td></tr>
   <tr><td><span class="mono">visual_blocks.py</span></td><td>单阶段确定性拆块（grpSp→group / visio / raster≥20% / 矢量）、块渲染、语义增强（DeepSeek）、跨模态关系</td><td>DeepSeek</td></tr>
   <tr><td><span class="mono">cli_blocks.py</span></td><td>blocks/caption 命令：XML 段导出（sources/）、rldimg 资源复制、caption 路由（DeepSeek XML / qwen 兜底）、binding 导出、captions.md</td><td>DeepSeek+qwen</td></tr>
@@ -109,7 +109,7 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成</div>
     <line x1="680" y1="84" x2="694" y2="84"/><line x1="816" y1="84" x2="830" y2="84"/>
     <line x1="952" y1="84" x2="966" y2="84"/>
   </g>
-  <text x="540" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#0f4c81">pptx-wzq v2.4.0 八环节流水线</text>
+  <text x="540" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#0f4c81">pptx-wzq v3.1.2 八环节流水线</text>
   <text x="540" y="196" text-anchor="middle" font-size="14.5" font-weight="bold" fill="#1b7fb5">caption 解读通道（规则 11/16）</text>
   <g font-size="13.5">
     <rect x="60" y="214" width="450" height="64" rx="10" fill="#eefaf2" stroke="#0e7a4d"/>
@@ -125,7 +125,7 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成</div>
 
 <h3>3.1 各环节要点</h3>
 <div class="steps">
-  <div class="step"><div class="n">①</div><div class="b"><b>blocks</b>：单阶段确定性拆块（grpSp→group / visio / 像素图≥20% / SVG-WMF 矢量；无自由聚类）；grpSp XML 段每组合一个文件导出 sources/；rldimg 资源图落盘；PowerPoint COM 整页渲染 + bbox 裁剪出块 PNG（images/）。<span class="tag g">本地</span><span class="tag">规则 1-9/10/12</span></div></div>
+  <div class="step"><div class="n">①</div><div class="b"><b>blocks</b>：单阶段确定性拆块（grpSp→group / visio / 像素图≥20% / SVG-WMF 矢量；无自由聚类）；grpSp XML 段每组合一个文件导出 sources/；rldimg 资源图落盘；PowerPoint/WPS COM 整页渲染 + bbox 裁剪出块 PNG（images/）。<span class="tag g">本地</span><span class="tag">规则 1-9/10/12</span></div></div>
   <div class="step"><div class="n">②</div><div class="b"><b>text</b>：页面正文提取（排除页眉页脚/母版固定文本）；组内文字标「[图块内文本]」不混入正文；表格输出 Markdown 表格。<span class="tag g">本地</span></div></div>
   <div class="step"><div class="n">③</div><div class="b"><b>formula</b>：非组合公式 → LaTeX（OMML 原生 / MTEF / OCR 三级）；组合内公式排除（随 XML 段由 DeepSeek 转 LaTeX）。<span class="tag g">本地</span></div></div>
   <div class="step"><div class="n">④</div><div class="b"><b>caption</b>：按 sources/ 文件名顺序解读——.xml → DeepSeek 读 XML（超长本地压缩 + 3 次重试 + 规则模板兜底）；.png → qwen 读图。<span class="tag o">DeepSeek+qwen</span></div></div>
@@ -154,7 +154,7 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成</div>
   <tr><th>#</th><th>规则</th><th>实现</th></tr>
   <tr><td>10</td><td>grpSp 保留整段 XML，页标记，<b>每组合一个独立 .xml 文件</b>存 sources/</td><td>sources/slide_{页}_{块id}_grp.xml（原生 p:/a:/r: 前缀）</td></tr>
   <tr><td>11</td><td>grpSp 块 caption 用 DeepSeek 读 XML；组内公式转 LaTeX 融入</td><td>_ds_read_xml + 超长压缩 + 重试</td></tr>
-  <tr><td>12</td><td>grpSp 块用 PowerPoint 渲染 PNG 存 images/；PNG 不送 qwen</td><td>COM ExportAsFixedFormat PDF + PyMuPDF（仅 PowerPoint）</td></tr>
+  <tr><td>12</td><td>grpSp 块用 PowerPoint 渲染 PNG 存 images/；PNG 不送 qwen</td><td>COM ExportAsFixedFormat PDF + PyMuPDF（PowerPoint/WPS）</td></tr>
   <tr><td>13</td><td>Visio/vsdx 可剥离 → .vsdx 存 sources/ + 渲染 PNG 存 images/</td><td>原生文件剥离 + 渲染</td></tr>
   <tr><td>14</td><td>Visio 不可剥离 → XML 段，同 grpSp 处理</td><td>sources/slide_{页}_{块id}_ole.xml</td></tr>
   <tr><td>15</td><td>SVG/WMF 等矢量同 Visio：尽量 XML 段，不行才 PNG</td><td>sources/slide_{页}_{块id}_vec.xml</td></tr>
@@ -234,7 +234,7 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成</div>
   <tr><td><b>小像素图（装饰图标）</b></td><td>小于整页 20% 的图默认舍弃；<b>想保留 → 组合进相邻图形</b></td><td>组合内小图豁免；非组合小图丢弃并写入审计</td></tr>
   <tr><td><b>表格</b></td><td>无需操作：表格始终按表格读取</td><td>输出 Markdown 表格（texts.md），不产块</td></tr>
   <tr><td><b>带裁剪的图片（srcRect）</b></td><td>无需操作（自动保持显示一致）</td><td>元数据/资源/渲染/描述全程按裁剪显示</td></tr>
-  <tr><td><b>环境</b></td><td>本机安装 <b>Microsoft Office</b>（渲染通道仅 PowerPoint）+ 配置 DASHSCOPE_API_KEY（qwen）、DEEPSEEK_API_KEY</td><td>无 Office 渲染降级（无块图）；无 Key 跳过对应解读</td></tr>
+  <tr><td><b>环境</b></td><td>本机安装 <b>Microsoft Office 或 WPS 演示</b>（渲染自动探测：PowerPoint.Application → Kwpp.Application）+ 配置 DASHSCOPE_API_KEY（qwen）、DEEPSEEK_API_KEY</td><td>无演示应用渲染降级（无块图）；无 Key 跳过对应解读</td></tr>
 </table>
 
 <h2>7. 生命周期与可靠性</h2>
@@ -265,6 +265,16 @@ pptx-html     教材 HTML   pptx-deck     Deck 生成</div>
   <tr><td>2.2.0</td><td>textbook 规则改 500 字为限：不足扩写、超出直出整理（_tidy_direct）</td></tr>
   <tr><td>2.3.0</td><td>Author 整篇自主分章分节（一节可含多页），每页标注章节</td></tr>
   <tr><td>2.4.0</td><td>本报告（技术分析/流程/格式/预处理）随安装包分发</td></tr>
+  <tr><td>2.5.0</td><td>使用手册+技术分析合并文档（html/pdf）、README 全量更新</td></tr>
+  <tr><td>2.5.1</td><td>渲染静默降级修复（dependencies 补 pymupdf）；渲染失败明确警告</td></tr>
+  <tr><td>2.5.2</td><td>images/ 不再被 caption/blocks_json 清空（--skip-render）；DispatchEx 独立实例（Open 0x80070002）</td></tr>
+  <tr><td>2.6.0</td><td>OLE 预览图判定（preview_of）+ 组合内公式进 formulas.md（双通道）</td></tr>
+  <tr><td>3.0.0</td><td>语义增强提速（去 thinking + 并发 8，10 倍）+ 模型调用实时打印</td></tr>
+  <tr><td>3.0.1</td><td>related 并发提速（162 倍）+ 正文为空保守保留</td></tr>
+  <tr><td>3.0.2</td><td>渲染 Open 失败根因：pptx 强制 resolve + 错误完整显示</td></tr>
+  <tr><td>3.1.0</td><td>WPS 渲染支持（ProgID 自动探测 + 简化参数回退）</td></tr>
+  <tr><td>3.1.1</td><td>qwen 视觉兜底按需触发（仅 caption 未解读块）+ 图路径接通 images/</td></tr>
+  <tr><td>3.1.2</td><td>文档体系更新：README/使用手册/技术分析同步 3.0.x~3.1.x 全部变更</td></tr>
 </table>
 
 <div class="note good"><b>附注</b>：本报告所有字段与格式均来自 pptx-wzq 真实产物（visual_blocks.json / binding / textbook.md / captions.md / sources/），非虚构。安装后可通过 <span class="mono">python -c "import pptx_wzq; print(pptx_wzq.__version__)"</span> 确认版本。</div>

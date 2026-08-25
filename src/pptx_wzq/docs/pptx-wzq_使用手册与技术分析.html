@@ -51,7 +51,7 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 20px 4
 <body>
 <header class="cover">
   <h1>pptx-wzq 使用手册与技术分析</h1>
-  <div class="sub">PPT 多模态教学知识库自动化构建 · 版本 2.5.0 · 使用手册（第一部分）+ 技术分析报告（第二部分）</div>
+  <div class="sub">PPT 多模态教学知识库自动化构建 · 版本 3.1.2 · 使用手册（第一部分）+ 技术分析报告（第二部分）</div>
   <div class="author">作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</div>
 </header>
 <div class="wrap">
@@ -62,7 +62,7 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 20px 4
 <div class="card">
 <p><strong>作者：吴振谦 · wuzhenqian@nbu.edu.cn · QQ：38328063</strong></p>
 <p><strong>开发原因</strong>：高校教师在课程建设与教材建设中，长期面临「课件里的大量图片、公式、文本散落各处，难以整理为规范、可复用、图文并茂的教学资源」的痛点——手工整理一份课程的图文知识库往往要耗费数周。本工具把 <strong>PPT 自动转化为图文并茂的多模态教学知识库</strong>，让教师从机械整理中解放出来。</p>
-<p><strong>版本</strong>：当前 2.5.0（历经理念重构：v1.5 六步管线 → v2.0 十六规则落地 → v2.3 整篇分章分节 → v2.5 文档体系完备）。</p>
+<p><strong>版本</strong>：当前 3.1.2（历经理念重构：v1.5 六步管线 → v2.0 十六规则落地 → v2.3 整篇分章分节 → v2.6 预览图判定/公式双通道 → v3.0 全链路提速+实时打印 → v3.1 WPS 渲染+按需视觉兜底）。</p>
 </div>
 
 <h2>一、它能做什么（工作流程总览）</h2>
@@ -82,9 +82,9 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 20px 4
 <div class="card">
 <h4>系统要求</h4>
 <ul>
-<li><b>Windows 10/11</b>（强烈建议；渲染通道仅支持 PowerPoint COM）</li>
+<li><b>Windows 10/11</b>（强烈建议；渲染通道支持 PowerPoint/WPS COM）</li>
 <li>Python 3.9 及以上</li>
-<li><b>Microsoft Office PowerPoint</b>（必装：块渲染走 PowerPoint 原生，无 Office 则无渲染图、优雅降级）</li>
+<li><b>Microsoft Office PowerPoint 或 WPS 演示</b>（渲染自动探测：有 Office 用 Office、只有 WPS 用 WPS；均无则无渲染图、优雅降级）</li>
 <li>API Key：<code>DEEPSEEK_API_KEY</code>（语义解读/教材文案）、<code>DASHSCOPE_API_KEY</code>（qwen VLM 兜底）</li>
 </ul>
 <h4>下载方式</h4>
@@ -165,7 +165,7 @@ pptx-author --texts out\战略管理_texts.md --formulas out\战略管理_formul
 <h2>1. 系统定位与核心能力</h2>
 <div class="cards">
   <div class="card"><h4>🎯 定位</h4><p>把任意 PPT 课件解构为「多模态教学知识库」：文本/公式/图块三路抽取 + AI 解读 + 教材级文案，输出 JSON/Markdown/渲染图三件套。</p></div>
-  <div class="card"><h4>⚙️ 技术栈</h4><p>OOXML 原生解析 + DeepSeek-V4-Flash（语义/文案）+ qwen3.7-plus（VLM 兜底）+ PowerPoint COM 渲染。</p></div>
+  <div class="card"><h4>⚙️ 技术栈</h4><p>OOXML 原生解析 + DeepSeek-V4-Flash（语义/文案）+ qwen3.7-plus（VLM 兜底）+ PowerPoint/WPS COM 渲染（ProgID 自动探测）。</p></div>
   <div class="card"><h4>📦 交付物</h4><p>sources/ + images/ + visual_blocks.json + binding + textbook.md + captions.md。</p></div>
 </div>
 <ul>
@@ -180,7 +180,7 @@ pptx-author --texts out\战略管理_texts.md --formulas out\战略管理_formul
 <h3>2.1 模块划分</h3>
 <table>
 <tr><th>模块</th><th>职责</th><th>Token</th></tr>
-<tr><td><code>extract_pptx_images.py</code></td><td>OOXML 原子对象提取（图片/形状/grpSp/表格/公式/图表）；XML 段原生提取；srcRect 裁剪；PowerPoint COM 渲染</td><td>0</td></tr>
+<tr><td><code>extract_pptx_images.py</code></td><td>OOXML 原子对象提取（图片/形状/grpSp/表格/公式/图表）；XML 段原生提取；srcRect 裁剪；OLE 预览图判定（preview_of）；PowerPoint/WPS COM 渲染（ProgID 探测 + DispatchEx）</td><td>0</td></tr>
 <tr><td><code>extract_texts.py</code></td><td>页面文本（in_group 标记）、表格 Markdown</td><td>0</td></tr>
 <tr><td><code>visual_blocks.py</code></td><td>单阶段确定性拆块、块渲染、语义增强、跨模态关系</td><td>DeepSeek</td></tr>
 <tr><td><code>cli_blocks.py</code></td><td>XML 段导出、rldimg 复制、caption 路由、binding、captions.md</td><td>DeepSeek+qwen</td></tr>
@@ -304,11 +304,20 @@ pptx-related / pptx-author / pptx-bind / pptx-html / pptx-deck</pre>
 <tr><td>2.3.0</td><td>Author 整篇自主分章分节，每页标注章节</td></tr>
 <tr><td>2.4.0</td><td>技术分析报告（html/pdf/md）随安装包分发</td></tr>
 <tr><td>2.5.0</td><td>使用手册+技术分析合并文档、README 全量更新</td></tr>
+<tr><td>2.5.1</td><td>渲染静默降级修复（dependencies 补 pymupdf）；渲染失败明确警告</td></tr>
+<tr><td>2.5.2</td><td>images/ 不再被 caption/blocks_json 清空（--skip-render）；DispatchEx 独立实例</td></tr>
+<tr><td>2.6.0</td><td>OLE 预览图判定（preview_of，vector 块 63→0）+ 组合内公式进 formulas.md</td></tr>
+<tr><td>3.0.0</td><td>语义增强提速（去 thinking + 并发，10 倍）+ 模型调用实时打印（[DeepSeek]/[qwen]）</td></tr>
+<tr><td>3.0.1</td><td>related 并发提速（162 倍）+ 正文为空保守保留（防误删）</td></tr>
+<tr><td>3.0.2</td><td>渲染 Open 失败根因：pptx 强制 resolve 绝对路径 + 错误完整显示</td></tr>
+<tr><td>3.1.0</td><td>WPS 渲染支持（ProgID 自动探测 PowerPoint/Kwpp + 简化参数回退）</td></tr>
+<tr><td>3.1.1</td><td>qwen 视觉兜底按需触发（仅 caption 未解读块）+ 图路径接通 images/</td></tr>
+<tr><td>3.1.2</td><td>文档体系更新：README/使用手册/技术分析同步 3.0.x~3.1.x 全部变更</td></tr>
 </table>
 
 <div class="note good"><b>附注</b>：本手册与技术分析的所有字段与格式均来自 pptx-wzq 真实产物（visual_blocks.json / binding / textbook.md / captions.md / sources/），非虚构。</div>
 
 </div>
-<footer>pptx-wzq 2.5.0 · 使用手册与技术分析 · 作者：吴振谦 · 本文档随安装包分发（from pptx_wzq import docs）</footer>
+<footer>pptx-wzq 3.1.2 · 使用手册与技术分析 · 作者：吴振谦 · 本文档随安装包分发（from pptx_wzq import docs）</footer>
 </body>
 </html>
