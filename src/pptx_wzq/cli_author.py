@@ -296,8 +296,15 @@ def _build_full_prompt(by_page: dict, target: list, subject: str,
 
 
 def _gen_textbook(client, full_prompt: str, subject: str,
-                  model: str, retries: int = 2) -> str:
-    """一次调用模型生成整份教材文案 md。"""
+                  model: str, max_tokens: int | None = None,
+                  retries: int = 2) -> str:
+    """一次调用模型生成整份教材文案 md。
+
+    v3.1.5：max_tokens 按批页数显式设置（页数×800+3000）——此前未设
+    max_tokens 时，大输出批（如 20 页）被 DeepSeek 默认输出上限截断，
+    输出失去「## 第 N 页」结构导致整批静默丢失（实测 textbook 只剩
+    小输出批的 3 页）。
+    """
     messages = [
         {"role": "system", "content":
          SYSTEM_PROMPT_TMPL.format(subject=subject)
@@ -325,6 +332,7 @@ def _gen_textbook(client, full_prompt: str, subject: str,
                 model=model, messages=messages, stream=False,
                 reasoning_effort="high",
                 extra_body={"thinking": {"type": "enabled"}},
+                **({"max_tokens": max_tokens} if max_tokens else {}),
             )
             out = (resp.choices[0].message.content or "").strip()
             print(f"[DeepSeek] 教材文案输出（前 300 字）：{out[:300]}…",
@@ -458,7 +466,8 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                   f"（{len(batch)} 页，输入约 {len(full_prompt)} 字符）",
                   file=sys.stderr)
             t0 = time.time()
-            text = _gen_textbook(client, full_prompt, subject, model)
+            text = _gen_textbook(client, full_prompt, subject, model,
+                                 max_tokens=len(batch) * 800 + 3000)
             dt = time.time() - t0
             n_out = len(re.findall(r"^##\s*第\s*\d+\s*页\s*$", text,
                                    re.MULTILINE))
@@ -475,6 +484,31 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
             for pg, lines in parsed.items():
                 if pg in batch:
                     results[pg] = "\n".join(x for x in lines if x.strip()).strip()
+            # v3.1.5：缺页校验——本批未产出的页按缺页单独重试一次
+            missing = [p for p in batch if p not in results]
+            if missing:
+                print(f"[警告] 本批缺失 {len(missing)} 页"
+                      f"（{'、'.join(map(str, missing[:8]))}"
+                      f"{'…' if len(missing) > 8 else ''}），"
+                      f"按缺页重试 1 次", file=sys.stderr)
+                retry_ctx = (f"（本批为整篇教材的第 {missing[0]}~{missing[-1]} 页；"
+                             f"章节划分须与已生成批次保持一致并延续。）")
+                retry_prompt = _build_full_prompt(by_page, missing, subject,
+                                                  batch_ctx=retry_ctx)
+                t1 = time.time()
+                text_r = _gen_textbook(client, retry_prompt, subject, model,
+                                       max_tokens=len(missing) * 800 + 3000)
+                print(f"[重试] 缺失页重试完成，耗时 {time.time()-t1:.0f}s，"
+                      f"输出 {len(text_r)} 字符", file=sys.stderr)
+                parsed_r = _split_pages(text_r)
+                for pg, lines in parsed_r.items():
+                    if pg in missing:
+                        results[pg] = "\n".join(
+                            x for x in lines if x.strip()).strip()
+                still = [p for p in missing if p not in results]
+                if still:
+                    print(f"[警告] 重试后仍缺失 {len(still)} 页：{still}",
+                          file=sys.stderr)
     else:
         n_batches = 0
 
@@ -501,11 +535,20 @@ def author_textbook(by_page: dict, pages: list, out_path: Path,
                         f"保留原意、尽量不增字数）。\n\n")
             f.write(f"{content}\n\n")
         f.write("---\n\n"
-                f"共 {len(target)} 页（{len(direct)} 页直出 + {len(model_target)} 页模型，"
+                f"共 {len(target)} 页（{len(direct)} 页直出 + "
+                f"{len(results) - len(direct)} 页模型，"
                 f"{n_batches} 批），学科：{subject}。\n")
+        # v3.1.5：诚实报告——实际输出页数不足时高亮缺失清单
+        missing_all = [p for p in target if p not in results]
+        if missing_all:
+            f.write(f"\n> ⚠️ 警告：实际仅输出 {len(results)} 页"
+                    f"（缺失 {len(missing_all)} 页："
+                    f"{'、'.join(map(str, missing_all[:12]))}"
+                    f"{'…' if len(missing_all) > 12 else ''}）。\n")
     total_chars = sum(len(v) for v in results.values())
     return {"pages_in": len(target), "pages_out": len(results),
             "direct_pages": len(direct), "model_pages": len(model_target),
+            "missing_pages": [p for p in target if p not in results],
             "batches": n_batches, "chars": total_chars,
             "subject": subject, "model": model, "md": str(out_path)}
 
