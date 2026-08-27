@@ -120,6 +120,7 @@ pptx-author --texts out\战略管理_texts.md --formulas out\战略管理_formul
 <tr><td><code>pptx-related</code></td><td>块相关性过滤 + 审计</td></tr>
 <tr><td><code>pptx-author</code></td><td>整篇分章分节教材文案（500 字为限）</td></tr>
 <tr><td><code>pptx-bind</code></td><td>图文绑定 JSON</td></tr>
+<tr><td><code>pptx-del</code></td><td>图块删除后处理：<code>pptx-del images\slide_29_blk_01.png -all</code>，删除块及其全部关联（images/sources/JSON/binding/captions），默认备份 + dry-run + 校验</td></tr>
 <tr><td><code>pptx-html</code> / <code>pptx-deck</code></td><td>教材 HTML / 教学 Deck 导出</td></tr>
 </table>
 
@@ -190,7 +191,7 @@ pptx-author --texts out\战略管理_texts.md --formulas out\战略管理_formul
 </table>
 <h3>2.2 命令体系</h3>
 <pre>pptx-paser / pptx-blocks / pptx-text / pptx-formula / pptx-caption
-pptx-related / pptx-author / pptx-bind / pptx-html / pptx-deck</pre>
+pptx-related / pptx-author / pptx-bind / pptx-del / pptx-html / pptx-deck</pre>
 
 <h2>3. 工作流程（8 环节）</h2>
 <div class="fig">

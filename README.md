@@ -94,6 +94,7 @@ pptx-paser "C:\课件\战略管理.pptx" -o out
 | `pptx-related` | 块相关性过滤 + 审计 |
 | `pptx-author` | 整篇分章分节教材文案（500 字为限） |
 | `pptx-bind` | 图文绑定 JSON |
+| `pptx-del` | **图块删除后处理**：`pptx-del images\slide_29_blk_01.png -all`，删除指定块及其全部关联（images/sources/JSON/binding/captions），等价于该组合不存在；默认备份 + dry-run + 一致性校验 |
 | `pptx-html` / `pptx-deck` | 教材 HTML / 教学 Deck 导出 |
 
 ## 五、输入 PPTX 预处理要求
@@ -271,6 +272,9 @@ pptx-paser "C:\课件\战略管理.pptx" -o out
 | 3.1.1 | **qwen 视觉兜底按需触发**：仅 caption 未解读的块读渲染图（调用 73→13）；图路径接通 images/（修复此前"从未真正读图"） |
 | 3.1.2 | 文档体系更新：README/使用手册/技术分析同步 3.0.x~3.1.x 全部变更（渲染通道、性能优化、实时打印、按需兜底） |
 | 3.1.3 | README 补「开发原因」；**PyPI 主页显示完整 README**（wheel METADATA 携带 long_description） |
+| 3.1.4 | ExportAsFixedFormat E_FAIL 可读化 + 旧 PDF 占用警告 |
+| 3.1.5 | author 大输出批截断根治：max_tokens + 缺页重试 + 诚实统计 |
+| 3.2.0 | **新增 `pptx-del` 命令**：流水线完成后的图块删除后处理（清理用户预处理不干净的 grpSp 组合），删除块及其全部关联输出，默认备份 + dry-run + 一致性校验 |
 
 ## 十三、文档与许可
 
